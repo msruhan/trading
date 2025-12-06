@@ -1,0 +1,94 @@
+<?php
+
+use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\EABridgeController;
+use App\Http\Controllers\Api\ManualEntryController;
+use App\Http\Controllers\Api\NewsController;
+use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\TradeController;
+use Illuminate\Support\Facades\Route;
+
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+*/
+
+// API Version 1
+Route::prefix('v1')->group(function () {
+    
+    // Public routes
+    Route::post('/auth/register', [AuthController::class, 'register']);
+    Route::post('/auth/login', [AuthController::class, 'login']);
+
+    // EA Bridge incoming endpoint (uses custom token auth)
+    Route::post('/incoming/trades', [EABridgeController::class, 'receiveTrades']);
+    Route::get('/incoming/health', [EABridgeController::class, 'healthCheck']);
+
+    // Protected routes
+    Route::middleware('auth:sanctum')->group(function () {
+        
+        // Auth
+        Route::prefix('auth')->group(function () {
+            Route::get('/user', [AuthController::class, 'user']);
+            Route::put('/profile', [AuthController::class, 'updateProfile']);
+            Route::put('/password', [AuthController::class, 'updatePassword']);
+            Route::post('/logout', [AuthController::class, 'logout']);
+            Route::post('/logout-all', [AuthController::class, 'logoutAll']);
+        });
+
+        // Dashboard
+        Route::prefix('dashboard')->group(function () {
+            Route::get('/', [DashboardController::class, 'index']);
+            Route::get('/metrics', [DashboardController::class, 'metrics']);
+            Route::get('/equity-curve', [DashboardController::class, 'equityCurve']);
+            Route::get('/daily-pnl', [DashboardController::class, 'dailyPnL']);
+            Route::get('/calendar', [DashboardController::class, 'calendar']);
+            Route::get('/stats/pair', [DashboardController::class, 'statsByPair']);
+            Route::get('/stats/hour', [DashboardController::class, 'statsByHour']);
+        });
+
+        // Accounts
+        Route::apiResource('accounts', AccountController::class);
+        Route::post('/accounts/{account}/sync', [AccountController::class, 'sync']);
+        Route::post('/accounts/{account}/regenerate-token', [AccountController::class, 'regenerateToken']);
+        Route::get('/accounts/{account}/sync-logs', [AccountController::class, 'syncLogs']);
+
+        // Trades
+        Route::get('/trades/open', [TradeController::class, 'openTrades']);
+        Route::get('/trades/summary', [TradeController::class, 'summary']);
+        Route::post('/trades/manual', [TradeController::class, 'store']);
+        Route::apiResource('trades', TradeController::class)->except(['store']);
+        Route::post('/upload/statement', [TradeController::class, 'uploadStatement']);
+
+        // Reports
+        Route::prefix('reports')->group(function () {
+            Route::get('/monthly', [ReportController::class, 'monthly']);
+            Route::get('/monthly/csv', [ReportController::class, 'exportCSV']);
+            Route::get('/monthly/pdf', [ReportController::class, 'exportPDF']);
+        });
+
+        // News
+        Route::get('/news/today', [NewsController::class, 'today']);
+        Route::get('/news/upcoming', [NewsController::class, 'upcoming']);
+        Route::get('/news/date/{date}', [NewsController::class, 'forDate']);
+        Route::apiResource('news', NewsController::class);
+
+        // Journal / Manual Entries
+        Route::get('/journal/tags', [ManualEntryController::class, 'tags']);
+        Route::get('/journal/date/{date}', [ManualEntryController::class, 'forDate']);
+        Route::apiResource('journal', ManualEntryController::class)->parameters([
+            'journal' => 'manualEntry'
+        ]);
+    });
+});
+
+// Fallback for undefined routes
+Route::fallback(function () {
+    return response()->json([
+        'message' => 'Endpoint not found',
+    ], 404);
+});
+

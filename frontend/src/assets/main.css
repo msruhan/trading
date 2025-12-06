@@ -1,0 +1,284 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom base styles */
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-dark-950 text-dark-100;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Light mode styles */
+  html:not(.dark) body {
+    @apply bg-gray-50 text-gray-900;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-dark-600;
+  }
+
+  html:not(.dark) ::-webkit-scrollbar-track {
+    @apply bg-gray-100;
+  }
+
+  html:not(.dark) ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300;
+  }
+
+  /* Number display optimization */
+  .font-numeric {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  /* Card component */
+  .card {
+    @apply bg-dark-900/50 border border-dark-800 rounded-xl backdrop-blur-sm;
+  }
+
+  html:not(.dark) .card {
+    @apply bg-white border-gray-200 shadow-sm;
+  }
+
+  /* Stat card */
+  .stat-card {
+    @apply card p-4 space-y-2;
+  }
+
+  .stat-label {
+    @apply text-xs font-medium text-dark-400 uppercase tracking-wider;
+  }
+
+  html:not(.dark) .stat-label {
+    @apply text-gray-500;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold font-numeric;
+  }
+
+  /* Input styling */
+  .input {
+    @apply w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-dark-100
+           placeholder-dark-500 focus:outline-none focus:ring-2 focus:ring-primary-500/50 
+           focus:border-primary-500 transition-colors;
+  }
+
+  html:not(.dark) .input {
+    @apply bg-white border-gray-300 text-gray-900 placeholder-gray-400
+           focus:ring-primary-500/50 focus:border-primary-500;
+  }
+
+  /* Button styles */
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-900
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-primary-600 text-white hover:bg-primary-500 focus:ring-primary-500;
+  }
+
+  .btn-secondary {
+    @apply btn bg-dark-800 text-dark-100 border border-dark-700 
+           hover:bg-dark-700 focus:ring-dark-500;
+  }
+
+  html:not(.dark) .btn-secondary {
+    @apply bg-gray-100 text-gray-900 border-gray-300 hover:bg-gray-200;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-500 focus:ring-red-500;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-dark-800 text-dark-300 hover:text-dark-100;
+  }
+
+  /* Badge styles */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply badge bg-green-500/20 text-green-400;
+  }
+
+  .badge-danger {
+    @apply badge bg-red-500/20 text-red-400;
+  }
+
+  .badge-warning {
+    @apply badge bg-yellow-500/20 text-yellow-400;
+  }
+
+  .badge-info {
+    @apply badge bg-blue-500/20 text-blue-400;
+  }
+
+  /* Table styles */
+  .table-container {
+    @apply overflow-x-auto;
+  }
+
+  .table {
+    @apply w-full text-sm;
+  }
+
+  .table th {
+    @apply px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider
+           border-b border-dark-800;
+  }
+
+  html:not(.dark) .table th {
+    @apply text-gray-500 border-gray-200;
+  }
+
+  .table td {
+    @apply px-4 py-3 border-b border-dark-800/50;
+  }
+
+  html:not(.dark) .table td {
+    @apply border-gray-100;
+  }
+
+  .table tbody tr {
+    @apply hover:bg-dark-800/30 transition-colors;
+  }
+
+  html:not(.dark) .table tbody tr {
+    @apply hover:bg-gray-50;
+  }
+
+  /* Profit/Loss colors */
+  .profit {
+    @apply text-green-400;
+  }
+
+  .loss {
+    @apply text-red-400;
+  }
+
+  /* Sidebar link */
+  .sidebar-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-dark-400 
+           hover:text-dark-100 hover:bg-dark-800/50 transition-all duration-200;
+  }
+
+  .sidebar-link.active {
+    @apply bg-primary-500/10 text-primary-400 border-l-2 border-primary-500;
+  }
+
+  html:not(.dark) .sidebar-link {
+    @apply text-gray-600 hover:text-gray-900 hover:bg-gray-100;
+  }
+
+  html:not(.dark) .sidebar-link.active {
+    @apply bg-primary-50 text-primary-700 border-primary-500;
+  }
+
+  /* Loading spinner */
+  .spinner {
+    @apply w-5 h-5 border-2 border-dark-600 border-t-primary-500 rounded-full animate-spin;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    @apply absolute z-50 px-2 py-1 text-xs font-medium text-white bg-dark-800 
+           rounded shadow-lg whitespace-nowrap;
+  }
+}
+
+/* Custom utilities */
+@layer utilities {
+  /* Hide scrollbar but allow scrolling */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-accent-400;
+  }
+
+  /* Glass effect */
+  .glass {
+    @apply bg-dark-900/70 backdrop-blur-xl border border-dark-800/50;
+  }
+
+  html:not(.dark) .glass {
+    @apply bg-white/70 border-gray-200/50;
+  }
+
+  /* Animation delays */
+  .delay-100 { animation-delay: 100ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+  .delay-600 { animation-delay: 600ms; }
+  .delay-700 { animation-delay: 700ms; }
+  .delay-800 { animation-delay: 800ms; }
+  .delay-900 { animation-delay: 900ms; }
+  .delay-1000 { animation-delay: 1000ms; }
+}
+
+/* Landing page specific animations */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(34, 197, 94, 0.5);
+  }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+/* Chart.js custom styling */
+.chartjs-tooltip {
+  @apply bg-dark-800 rounded-lg shadow-xl border border-dark-700 p-2;
+}
+
