@@ -11,20 +11,22 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('ea_commands', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('account_id')->constrained()->onDelete('cascade');
-            $table->string('command'); // 'close_all', 'pause', 'resume', 'schedule'
-            $table->json('params')->nullable(); // For schedule: {days: [1,2,3], start_time: '10:00', end_time: '15:00'}
-            $table->enum('status', ['pending', 'executing', 'completed', 'failed'])->default('pending');
-            $table->text('result')->nullable(); // Execution result from EA
-            $table->text('error_message')->nullable();
-            $table->timestamp('executed_at')->nullable();
-            $table->timestamps();
+        if (!Schema::hasTable('ea_commands')) {
+            Schema::create('ea_commands', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('account_id')->constrained()->onDelete('cascade');
+                $table->string('command'); // 'close_all', 'pause', 'resume', 'schedule'
+                $table->json('params')->nullable(); // For schedule: {days: [1,2,3], start_time: '10:00', end_time: '15:00'}
+                $table->enum('status', ['pending', 'executing', 'completed', 'failed'])->default('pending');
+                $table->text('result')->nullable(); // Execution result from EA
+                $table->text('error_message')->nullable();
+                $table->timestamp('executed_at')->nullable();
+                $table->timestamps();
 
-            $table->index(['account_id', 'status']);
-            $table->index(['account_id', 'created_at']);
-        });
+                $table->index(['account_id', 'status']);
+                $table->index(['account_id', 'created_at']);
+            });
+        }
     }
 
     /**

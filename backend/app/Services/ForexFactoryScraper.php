@@ -30,7 +30,7 @@ class ForexFactoryScraper
     /**
      * Sync news for a specific date from ForexFactory
      */
-    public function syncForDate(Carbon $date): array
+    public function syncForDate(Carbon $date, int $userId): array
     {
         $result = [
             'success' => false,
@@ -44,7 +44,7 @@ class ForexFactoryScraper
             
             foreach ($events as $event) {
                 try {
-                    $newsItem = $this->upsertNewsItem($event, $date);
+                    $newsItem = $this->upsertNewsItem($event, $date, $userId);
                     if ($newsItem->wasRecentlyCreated) {
                         $result['synced']++;
                     } else {
@@ -71,7 +71,7 @@ class ForexFactoryScraper
     /**
      * Sync news for the entire week from ForexFactory
      */
-    public function syncWeek(): array
+    public function syncWeek(int $userId): array
     {
         $result = [
             'success' => false,
@@ -91,7 +91,7 @@ class ForexFactoryScraper
                     }
                     
                     $eventDate = Carbon::parse($event['date']);
-                    $newsItem = $this->upsertNewsItem($event, $eventDate);
+                    $newsItem = $this->upsertNewsItem($event, $eventDate, $userId);
                     
                     $dateStr = $eventDate->format('Y-m-d');
                     if (!in_array($dateStr, $result['dates_processed'])) {
@@ -375,7 +375,7 @@ class ForexFactoryScraper
     /**
      * Upsert news item to database
      */
-    private function upsertNewsItem(array $event, Carbon $date): NewsItem
+    private function upsertNewsItem(array $event, Carbon $date, int $userId): NewsItem
     {
         $currency = strtoupper($event['currency'] ?? '');
         $affectedPairs = $this->currencyPairs[$currency] ?? [];
@@ -395,28 +395,33 @@ class ForexFactoryScraper
         $forecast = $this->cleanNumericValue($event['forecast'] ?? null);
         $previous = $this->cleanNumericValue($event['previous'] ?? null);
 
-        return NewsItem::updateOrCreate(
-            [
-                'date' => $date->format('Y-m-d'),
-                'ff_event_id' => $ffEventId,
-            ],
-            [
-                'time' => $time,
-                'title' => $event['title'] ?? 'Unknown Event',
-                'currency' => $currency,
-                'impact' => $event['impact'] ?? 'medium',
-                'actual' => $actual,
-                'forecast' => $forecast,
-                'previous' => $previous,
-                'source' => 'ForexFactory',
-                'url' => $this->baseUrl . '/calendar',
-                'is_manual' => false,
-                'affected_pairs' => $affectedPairs,
-                // Auto-suggest EA status based on impact
-                'ea_status' => $this->suggestEaStatus($event['impact'] ?? 'medium'),
-                'should_disable_ea' => ($event['impact'] ?? 'medium') === 'high',
-            ]
-        );
+        // Search criteria: date, ff_event_id, and created_by (user_id)
+        $searchCriteria = [
+            'date' => $date->format('Y-m-d'),
+            'ff_event_id' => $ffEventId,
+            'created_by' => $userId, // Same user
+        ];
+        
+        $updateData = [
+            'time' => $time,
+            'title' => $event['title'] ?? 'Unknown Event',
+            'currency' => $currency,
+            'impact' => $event['impact'] ?? 'medium',
+            'actual' => $actual,
+            'forecast' => $forecast,
+            'previous' => $previous,
+            'source' => 'ForexFactory',
+            'url' => $this->baseUrl . '/calendar',
+            'is_manual' => false,
+            'affected_pairs' => $affectedPairs,
+            'created_by' => $userId, // Link to user (admin/demo)
+        ];
+        
+        // Don't auto-set EA status - let user mark it manually
+        // 'ea_status' => null, // Default to empty
+        // 'should_disable_ea' => false, // Default to false
+        
+        return NewsItem::updateOrCreate($searchCriteria, $updateData);
     }
 
     /**

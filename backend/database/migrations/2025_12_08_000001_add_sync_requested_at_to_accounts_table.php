@@ -12,7 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('accounts', function (Blueprint $table) {
-            $table->timestamp('sync_requested_at')->nullable()->after('last_sync_at');
+            if (!Schema::hasColumn('accounts', 'sync_requested_at')) {
+                $table->timestamp('sync_requested_at')->nullable()->after('last_sync_at');
+            }
         });
     }
 

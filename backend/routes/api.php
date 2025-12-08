@@ -97,6 +97,11 @@ Route::prefix('v1')->group(function () {
         Route::get('/news/ea-stats', [NewsController::class, 'eaStats']);
         Route::put('/news/{newsItem}/mark-ea', [NewsController::class, 'markEaStatus']);
         Route::post('/news/bulk-mark-ea', [NewsController::class, 'bulkMarkEaStatus']);
+        // Predictions
+    Route::get('/news/predictions', [NewsController::class, 'predictions']);
+    Route::get('/news/prediction-stats', [NewsController::class, 'predictionStats']);
+    Route::post('/news/technical-analysis', [NewsController::class, 'technicalAnalysis']);
+        Route::get('/news/notable-events', [NewsController::class, 'notableEvents']);
         Route::apiResource('news', NewsController::class);
 
         // Journal / Manual Entries

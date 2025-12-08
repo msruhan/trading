@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Carbon\Carbon;
+use App\Models\User;
 
 class NewsItem extends Model
 {
@@ -25,7 +26,7 @@ class NewsItem extends Model
         'forecast',
         'previous',
         'is_manual',
-        'created_by',
+        'created_by', // Link to user (admin/demo user)
         // EA Tracking fields
         'ea_status',
         'user_notes',
@@ -105,11 +106,15 @@ class NewsItem extends Model
      */
     public function getEaStatusColorAttribute(): string
     {
+        if (!$this->ea_status || $this->ea_status === '') {
+            return 'text-dark-400 bg-dark-800/50 border-dark-700 hover:border-dark-600';
+        }
+        
         return match($this->ea_status) {
             'safe' => 'text-green-400 bg-green-500/10 border-green-500/30',
             'caution' => 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30',
             'danger' => 'text-red-400 bg-red-500/10 border-red-500/30',
-            default => 'text-gray-400 bg-gray-500/10 border-gray-500/30',
+            default => 'text-dark-400 bg-dark-800/50 border-dark-700 hover:border-dark-600',
         };
     }
 
