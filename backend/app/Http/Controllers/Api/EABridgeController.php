@@ -7,12 +7,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\ActivityLog;
 use App\Models\Balance;
+use App\Models\EaCommand;
 use App\Models\SyncLog;
 use App\Models\Trade;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class EABridgeController extends Controller
 {
@@ -87,6 +89,9 @@ class EABridgeController extends Controller
             $newTrades = 0;
             $updatedTrades = 0;
             $totalTradesReceived = count($validated['trades'] ?? []);
+            
+            // Track daily balance changes from closed trades
+            $dailyBalances = [];
 
             Log::info('Processing trades from EA', [
                 'account_id' => $account->id,
@@ -100,29 +105,29 @@ class EABridgeController extends Controller
                     $openTime = $this->parseDateTime($tradeData['open_time']);
                     $closeTime = !empty($tradeData['close_time']) ? $this->parseDateTime($tradeData['close_time']) : null;
                     
-                    $trade = Trade::updateOrCreate(
-                        [
-                            'account_id' => $account->id,
-                            'ticket' => $tradeData['ticket'],
-                        ],
-                        [
-                            'pair' => strtoupper($tradeData['pair']),
-                            'type' => $this->normalizeType($tradeData['type']),
-                            'status' => empty($tradeData['close_time']) ? 'open' : 'closed',
+                $trade = Trade::updateOrCreate(
+                    [
+                        'account_id' => $account->id,
+                        'ticket' => $tradeData['ticket'],
+                    ],
+                    [
+                        'pair' => strtoupper($tradeData['pair']),
+                        'type' => $this->normalizeType($tradeData['type']),
+                        'status' => empty($tradeData['close_time']) ? 'open' : 'closed',
                             'open_time' => $openTime,
                             'close_time' => $closeTime,
-                            'open_price' => $tradeData['open_price'],
-                            'close_price' => $tradeData['close_price'] ?? null,
-                            'lots' => $tradeData['lots'],
-                            'profit' => $tradeData['profit'] ?? null,
-                            'swap' => $tradeData['swap'] ?? 0,
-                            'commission' => $tradeData['commission'] ?? 0,
-                            'stop_loss' => $tradeData['stop_loss'] ?? null,
-                            'take_profit' => $tradeData['take_profit'] ?? null,
-                            'comment' => $tradeData['comment'] ?? null,
-                            'magic_number' => $tradeData['magic_number'] ?? null,
-                        ]
-                    );
+                        'open_price' => $tradeData['open_price'],
+                        'close_price' => $tradeData['close_price'] ?? null,
+                        'lots' => $tradeData['lots'],
+                        'profit' => $tradeData['profit'] ?? null,
+                        'swap' => $tradeData['swap'] ?? 0,
+                        'commission' => $tradeData['commission'] ?? 0,
+                        'stop_loss' => $tradeData['stop_loss'] ?? null,
+                        'take_profit' => $tradeData['take_profit'] ?? null,
+                        'comment' => $tradeData['comment'] ?? null,
+                        'magic_number' => $tradeData['magic_number'] ?? null,
+                    ]
+                );
                 } catch (\Exception $e) {
                     Log::error('Failed to process trade', [
                         'account_id' => $account->id,
@@ -153,9 +158,107 @@ class EABridgeController extends Controller
                     $trade->pips = $trade->calculatePips();
                     $trade->duration_minutes = $trade->calculateDuration();
                     $trade->save();
+                    
+                    // Track balance change for this trade's close date
+                    if ($trade->close_time) {
+                        $closeDate = $trade->close_time->format('Y-m-d');
+                        if (!isset($dailyBalances[$closeDate])) {
+                            $dailyBalances[$closeDate] = [
+                                'date' => $closeDate,
+                                'profit' => 0,
+                                'trades_count' => 0,
+                            ];
+                        }
+                        $dailyBalances[$closeDate]['profit'] += (float) ($trade->profit ?? 0);
+                        $dailyBalances[$closeDate]['trades_count']++;
+                    }
+                }
+            }
+            
+            // Create historical balance snapshots based on closed trades
+            // This allows equity curve to show data from trade close dates, not just sync dates
+            if (!empty($dailyBalances)) {
+                // Get initial balance (from account or first balance record)
+                $initialBalance = $account->initial_balance ?? 0;
+                $firstBalance = $account->balances()->orderBy('timestamp')->first();
+                if ($firstBalance) {
+                    $initialBalance = (float) $firstBalance->balance;
+                }
+                
+                // Sort dates chronologically
+                ksort($dailyBalances);
+                
+                $runningBalance = $initialBalance;
+                $runningEquity = $initialBalance;
+                
+                foreach ($dailyBalances as $date => $data) {
+                    // Calculate balance at end of this day
+                    $runningBalance += $data['profit'];
+                    $runningEquity = $runningBalance; // For closed trades, equity = balance
+                    
+                    // Check if balance snapshot already exists for this date
+                    $existingBalance = $account->balances()
+                        ->whereDate('timestamp', $date)
+                        ->first();
+                    
+                    if (!$existingBalance) {
+                        // Create balance snapshot for this date
+                        // Only create if date is in the past (not today) to avoid overwriting real-time sync data
+                        $balanceDate = \Carbon\Carbon::parse($date);
+                        if ($balanceDate->isPast() && !$balanceDate->isToday()) {
+                            // Use end of day (23:59:59) to ensure it's before any real-time sync
+                            // Real-time sync uses now() which will always be newer than 23:59:59 of past dates
+                            // This ensures real-time sync data (with current timestamp) will always be latest
+                            Balance::create([
+                                'account_id' => $account->id,
+                                'timestamp' => $balanceDate->copy()->endOfDay(),
+                                'balance' => $runningBalance,
+                                'equity' => $runningEquity,
+                                'margin' => 0,
+                                'free_margin' => $runningEquity,
+                                'margin_level' => 0.00, // Use 0.00 instead of null (column doesn't allow null)
+                                'floating_pl' => 0, // No open trades for historical data
+                                'open_trades_count' => 0,
+                            ]);
+                        }
+                    } else {
+                        // Don't update existing balance if it's from a real sync
+                        // Real-time sync has timestamp from now(), historical has endOfDay() timestamp
+                        // Check if existing balance is historical (has endOfDay timestamp, not current timestamp)
+                        $existingTimestamp = \Carbon\Carbon::parse($existingBalance->timestamp);
+                        $isHistorical = $existingTimestamp->format('H:i:s') === '23:59:59' 
+                            || $existingTimestamp->isPast();
+                        
+                        if ($isHistorical && $existingBalance->margin == 0 && $existingBalance->open_trades_count == 0) {
+                            // This is a generated historical snapshot, safe to update
+                            $existingBalance->update([
+                                'balance' => $runningBalance,
+                                'equity' => $runningEquity,
+                            ]);
+                        }
+                        // Otherwise, preserve the real sync data (has current timestamp)
+                    }
                 }
             }
 
+            // Update initial_balance if not set (first sync)
+            if ($account->initial_balance <= 0) {
+                // Calculate initial balance from current balance minus all closed trades profit
+                $totalProfitFromTrades = $account->trades()
+                    ->where('status', 'closed')
+                    ->sum('profit');
+                
+                $calculatedInitialBalance = $validated['balance']['balance'] - (float) $totalProfitFromTrades;
+                
+                // Only update if calculated initial balance is reasonable (positive and not too different from current)
+                if ($calculatedInitialBalance > 0 && $calculatedInitialBalance <= $validated['balance']['balance']) {
+                    $account->initial_balance = $calculatedInitialBalance;
+                } else {
+                    // Fallback: use current balance as initial (assume no trades yet or first sync)
+                    $account->initial_balance = $validated['balance']['balance'];
+                }
+            }
+            
             // Update account status
             $account->update([
                 'status' => 'active',
@@ -179,11 +282,42 @@ class EABridgeController extends Controller
                 'updated_trades' => $updatedTrades,
             ]);
 
+            // Get pending commands for this account (check if table exists first)
+            $pendingCommands = [];
+            try {
+                if (Schema::hasTable('ea_commands')) {
+                    $pendingCommands = $account->eaCommands()
+                        ->pending()
+                        ->orderBy('created_at', 'asc')
+                        ->get()
+                        ->map(function ($cmd) {
+                            return [
+                                'id' => $cmd->id,
+                                'command' => $cmd->command,
+                                'params' => $cmd->params,
+                            ];
+                        });
+                }
+            } catch (\Exception $e) {
+                // Table doesn't exist or error - return empty array
+                Log::warning('EA Commands table not found or error: ' . $e->getMessage());
+            }
+
+            // Check if sync was requested from web (sync_requested_at is set)
+            $syncRequested = $account->sync_requested_at !== null;
+            
+            // Clear sync_requested_at after processing
+            if ($syncRequested) {
+                $account->update(['sync_requested_at' => null]);
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => "Synced: {$newTrades} new, {$updatedTrades} updated trades",
                 'new_trades' => $newTrades,
                 'updated_trades' => $updatedTrades,
+                'commands' => $pendingCommands, // Return pending commands for EA to execute
+                'sync_requested' => $syncRequested, // Indicate if this sync was triggered from web
             ]);
 
         } catch (\Exception $e) {
@@ -300,10 +434,105 @@ class EABridgeController extends Controller
             return response()->json(['status' => 'unauthorized'], 401);
         }
 
+        // Check if sync is requested from web
+        $syncRequested = $account->sync_requested_at !== null;
+
         return response()->json([
             'status' => 'ok',
             'account_id' => $account->id,
             'server_time' => now()->toIso8601String(),
+            'sync_requested' => $syncRequested, // Indicate if sync was requested from web
+        ]);
+    }
+
+    /**
+     * Check if data has changed by comparing hash.
+     */
+    public function checkDataChanged(Request $request): JsonResponse
+    {
+        $account = $this->authenticateRequest($request);
+
+        if (!$account) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $validated = $request->validate([
+            'data_hash' => 'required|string',
+        ]);
+
+        // Calculate current data hash from database
+        $currentBalance = $account->balances()
+            ->orderBy('timestamp', 'desc')
+            ->first();
+
+        $openTrades = $account->trades()
+            ->where('status', 'open')
+            ->orderBy('open_time', 'desc')
+            ->get();
+
+        // Build hash string similar to EA
+        $hashStr = '';
+        if ($currentBalance) {
+            $hashStr .= number_format($currentBalance->balance, 2, '.', '');
+            $hashStr .= '|';
+            $hashStr .= number_format($currentBalance->equity, 2, '.', '');
+            $hashStr .= '|';
+            $hashStr .= number_format($currentBalance->margin ?? 0, 2, '.', '');
+            $hashStr .= '|';
+        } else {
+            $hashStr .= '0.00|0.00|0.00|';
+        }
+
+        $openTradesCount = $openTrades->count();
+        $totalOpenProfit = $openTrades->sum('profit');
+        $openTickets = $openTrades->map(function ($trade) {
+            return $trade->ticket . ':' . number_format($trade->profit ?? 0, 2, '.', '');
+        })->implode(',');
+
+        $hashStr .= $openTradesCount;
+        $hashStr .= '|';
+        $hashStr .= number_format($totalOpenProfit, 2, '.', '');
+        $hashStr .= '|';
+        $hashStr .= $openTickets;
+
+        // Check if account has no data (fresh start after clear data)
+        $hasNoData = $account->trades()->count() == 0 && $currentBalance == null;
+        
+        // Compare hashes
+        $noChanges = ($validated['data_hash'] === $hashStr);
+        
+        // Force sync if account has no data (after clear data) or if sync was requested
+        $forceSync = $hasNoData || $account->sync_requested_at !== null;
+
+        // Get pending commands even if no changes
+        $pendingCommands = [];
+        try {
+            if (Schema::hasTable('ea_commands')) {
+                $pendingCommands = $account->eaCommands()
+                    ->pending()
+                    ->orderBy('created_at', 'asc')
+                    ->get()
+                    ->map(function ($cmd) {
+                        return [
+                            'id' => $cmd->id,
+                            'command' => $cmd->command,
+                            'params' => $cmd->params,
+                        ];
+                    });
+            }
+        } catch (\Exception $e) {
+            Log::warning('EA Commands table not found or error: ' . $e->getMessage());
+        }
+
+        // Check if sync was requested from web
+        $syncRequested = $account->sync_requested_at !== null;
+
+        return response()->json([
+            'no_changes' => $noChanges && !$forceSync, // Don't skip if force sync
+            'force_sync' => $forceSync, // Force sync flag
+            'has_no_data' => $hasNoData, // Indicate if account has no data
+            'commands' => $pendingCommands,
+            'sync_requested' => $syncRequested,
         ]);
     }
 }

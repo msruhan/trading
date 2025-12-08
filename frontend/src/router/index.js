@@ -16,6 +16,7 @@ const Settings = () => import('@/pages/Settings.vue')
 const Journal = () => import('@/pages/Journal.vue')
 const Portfolio = () => import('@/pages/Portfolio.vue')
 const News = () => import('@/pages/News.vue')
+const Chart = () => import('@/pages/Chart.vue')
 
 const routes = [
   {
@@ -94,6 +95,12 @@ const routes = [
     path: '/news',
     name: 'news',
     component: News,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/chart',
+    name: 'chart',
+    component: Chart,
     meta: { requiresAuth: true },
   },
   {

@@ -65,8 +65,18 @@ export const accountsAPI = {
   update: (id, data) => api.put(`/accounts/${id}`, data),
   delete: (id) => api.delete(`/accounts/${id}`),
   sync: (id) => api.post(`/accounts/${id}/sync`),
+  triggerSync: (id) => api.post(`/accounts/${id}/trigger-sync`),
   regenerateToken: (id) => api.post(`/accounts/${id}/regenerate-token`),
+  clearData: (id) => api.post(`/accounts/${id}/clear-data`),
   getSyncLogs: (id, params) => api.get(`/accounts/${id}/sync-logs`, { params }),
+}
+
+// EA Commands API
+export const eaCommandsAPI = {
+  getAll: (accountId, params) => api.get(`/accounts/${accountId}/ea-commands`, { params }),
+  getPending: (accountId) => api.get(`/accounts/${accountId}/ea-commands/pending`),
+  create: (accountId, data) => api.post(`/accounts/${accountId}/ea-commands`, data),
+  updateStatus: (commandId, data) => api.put(`/ea-commands/${commandId}/status`, data),
 }
 
 // Trades API
@@ -110,6 +120,16 @@ export const journalAPI = {
   create: (data) => api.post('/journal', data),
   update: (id, data) => api.put(`/journal/${id}`, data),
   delete: (id) => api.delete(`/journal/${id}`),
+}
+
+// Chart Analysis API
+export const chartAnalysisAPI = {
+  getAll: () => api.get('/chart-analyses'),
+  getBySymbol: (symbol, interval) => api.get(`/chart-analyses/${encodeURIComponent(symbol)}/${interval}`),
+  getOne: (id) => api.get(`/chart-analyses/${id}`),
+  create: (data) => api.post('/chart-analyses', data),
+  update: (id, data) => api.put(`/chart-analyses/${id}`, data),
+  delete: (id) => api.delete(`/chart-analyses/${id}`),
 }
 
 export default api

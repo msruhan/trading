@@ -4,9 +4,15 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accounts'
 import { accountsAPI } from '@/services/api'
 import StatCard from '@/components/dashboard/StatCard.vue'
-import EquityChart from '@/components/charts/EquityChart.vue'
+import ProfitChart from '@/components/charts/ProfitChart.vue'
+import BalanceChart from '@/components/charts/BalanceChart.vue'
+import GrowthChart from '@/components/charts/GrowthChart.vue'
 import MonthlyPnLChart from '@/components/charts/MonthlyPnLChart.vue'
 import TradeTable from '@/components/common/TradeTable.vue'
+import TradingStatsTable from '@/components/common/TradingStatsTable.vue'
+import TradingPeriodsTable from '@/components/common/TradingPeriodsTable.vue'
+import AccountInfoPanel from '@/components/common/AccountInfoPanel.vue'
+import ChartModal from '@/components/charts/ChartModal.vue'
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
@@ -14,6 +20,7 @@ import {
   KeyIcon,
   CurrencyDollarIcon,
   ChartBarIcon,
+  XCircleIcon,
 } from '@heroicons/vue/24/outline'
 
 const route = useRoute()
@@ -23,6 +30,7 @@ const accountsStore = useAccountsStore()
 const loading = ref(false)
 const accountData = ref(null)
 const syncLogs = ref([])
+const chartModal = ref({ show: false, type: null })
 
 // Watch accountData to ensure it never becomes invalid
 watch(accountData, (newValue) => {
@@ -42,7 +50,7 @@ onMounted(async () => {
 
 const fetchAccountData = async (showLoading = true) => {
   if (showLoading) {
-    loading.value = true
+  loading.value = true
   }
   try {
     const response = await accountsAPI.getOne(route.params.id)
@@ -60,6 +68,8 @@ const fetchAccountData = async (showLoading = true) => {
       monthly_pnl: newData?.monthly_pnl ?? accountData.value?.monthly_pnl ?? [],
       equity_curve: newData?.equity_curve ?? accountData.value?.equity_curve ?? [],
       daily_pnl: newData?.daily_pnl ?? accountData.value?.daily_pnl ?? [],
+      period_stats: newData?.period_stats ?? accountData.value?.period_stats ?? {},
+      account_info: newData?.account_info ?? accountData.value?.account_info ?? {},
     }
     
     // CRITICAL: Ensure account object always exists
@@ -74,6 +84,8 @@ const fetchAccountData = async (showLoading = true) => {
       hasStats: !!accountData.value.stats,
       recentTradesCount: accountData.value.recent_trades?.length || 0,
       monthlyPnLCount: accountData.value.monthly_pnl?.length || 0,
+      equityCurveCount: accountData.value.equity_curve?.length || 0,
+      equityCurveSample: accountData.value.equity_curve?.slice(0, 3) || [],
     })
     
     // Final safety check - ensure accountData is never null
@@ -81,7 +93,7 @@ const fetchAccountData = async (showLoading = true) => {
       console.error('Account data is invalid after fetch!', accountData.value)
       // Don't reset to empty - keep existing data if available
       if (!accountData.value) {
-        accountData.value = { account: {}, stats: {}, recent_trades: [], monthly_pnl: [], equity_curve: [], daily_pnl: [] }
+        accountData.value = { account: {}, stats: {}, recent_trades: [], monthly_pnl: [], equity_curve: [], daily_pnl: [], period_stats: {}, account_info: {} }
       }
     }
   } catch (error) {
@@ -93,14 +105,14 @@ const fetchAccountData = async (showLoading = true) => {
         router.push('/accounts')
       } else if (error.response?.status === 403) {
         alert('You do not have permission to view this account')
-        router.push('/accounts')
+    router.push('/accounts')
       } else {
         alert('Failed to load account data. Please try again.')
       }
     }
   } finally {
     if (showLoading) {
-      loading.value = false
+    loading.value = false
     }
   }
 }
@@ -111,7 +123,7 @@ const fetchSyncLogs = async () => {
     console.log('Sync logs response:', response.data)
     // Handle paginated response
     if (response.data?.data) {
-      syncLogs.value = response.data.data
+    syncLogs.value = response.data.data
     } else if (Array.isArray(response.data)) {
       syncLogs.value = response.data
     } else {
@@ -129,7 +141,10 @@ const handleSync = async () => {
     // Preserve current accountData before sync
     const previousData = { ...accountData.value }
     
-    await accountsStore.syncAccount(route.params.id)
+    // Trigger EA sync (on-demand mode)
+    await accountsAPI.triggerSync(route.params.id)
+    
+    alert('Sync request sent to EA. The EA will sync on the next check (usually within a few seconds).')
     
     // Refresh data after a delay, but don't show loading spinner to avoid hiding sections
     setTimeout(async () => {
@@ -143,9 +158,10 @@ const handleSync = async () => {
           accountData.value = previousData
         }
       }
-    }, 2000)
+    }, 5000) // Wait 5 seconds for EA to process sync
   } catch (error) {
     console.error('Sync failed:', error)
+    alert(error.response?.data?.message || 'Failed to trigger sync. Please try again.')
     // Don't clear accountData on sync error
   }
 }
@@ -160,6 +176,29 @@ const handleDelete = async () => {
     router.push('/accounts')
   } catch (error) {
     console.error('Failed to delete account:', error)
+  }
+}
+
+const handleClearData = async () => {
+  if (!confirm('Are you sure you want to clear all data for this account?\n\nThis will delete:\n- All trades\n- All balance snapshots\n- All sync logs\n\nYou can sync again after clearing. This action cannot be undone.')) {
+    return
+  }
+  
+  try {
+    loading.value = true
+    await accountsAPI.clearData(route.params.id)
+    
+    // Show success message
+    alert('All account data cleared successfully. You can now sync again.')
+    
+    // Refresh account data
+    await fetchAccountData()
+    await fetchSyncLogs()
+  } catch (error) {
+    console.error('Failed to clear data:', error)
+    alert(error.response?.data?.message || 'Failed to clear account data. Please try again.')
+  } finally {
+    loading.value = false
   }
 }
 
@@ -189,6 +228,14 @@ const getStatusClass = (status) => {
     case 'processing': return 'badge-warning'
     default: return 'badge-info'
   }
+}
+
+const openChartModal = (type) => {
+  chartModal.value = { show: true, type }
+}
+
+const closeChartModal = () => {
+  chartModal.value = { show: false, type: null }
 }
 </script>
 
@@ -220,6 +267,14 @@ const getStatusClass = (status) => {
         >
           <ArrowPathIcon class="w-4 h-4" />
           Sync Now
+        </button>
+        <button
+          class="btn-warning flex items-center gap-2"
+          @click="handleClearData"
+          :disabled="loading"
+        >
+          <XCircleIcon class="w-4 h-4" />
+          Clear Data
         </button>
         <button
           class="btn-danger flex items-center gap-2"
@@ -270,11 +325,47 @@ const getStatusClass = (status) => {
         />
       </div>
 
-      <!-- Charts -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <EquityChart :data="accountData.equity_curve || []" />
-        <MonthlyPnLChart :data="accountData.monthly_pnl || []" />
+      <!-- Main Charts - 3 columns -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <ProfitChart 
+          :data="accountData.equity_curve || []" 
+          :accountId="accountData.account?.id"
+          :initialBalance="accountData.account?.initial_balance || 0"
+          @openModal="openChartModal"
+        />
+        <BalanceChart 
+          :data="accountData.equity_curve || []" 
+          :initialBalance="accountData.account?.initial_balance || 0"
+          :accountId="accountData.account?.id"
+          @openModal="openChartModal"
+        />
+        <GrowthChart 
+          :data="accountData.equity_curve || []" 
+          :initialBalance="accountData.account?.initial_balance || 0"
+          :accountId="accountData.account?.id"
+          @openModal="openChartModal"
+        />
       </div>
+      
+      <!-- Account Info & Right Column (Monthly P/L + Trading Periods) -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Left Column: Account Info Panel -->
+        <div>
+          <AccountInfoPanel :accountInfo="accountData.account_info || {}" :loading="loading" />
+        </div>
+        
+        <!-- Right Column: Monthly P/L Chart + Trading Periods Table -->
+        <div class="lg:col-span-2 space-y-6">
+          <!-- Monthly P/L Chart -->
+          <MonthlyPnLChart :data="accountData.monthly_pnl || []" />
+          
+          <!-- Trading Periods Table -->
+          <TradingPeriodsTable :periods="accountData.period_stats || {}" :loading="loading" />
+        </div>
+      </div>
+      
+      <!-- Trading Statistics Table -->
+      <TradingStatsTable :stats="accountData.stats || {}" :loading="loading" />
 
       <!-- Trade History -->
       <div class="card overflow-hidden">
@@ -442,6 +533,16 @@ const getStatusClass = (status) => {
         </div>
       </div>
     </template>
+    
+    <!-- Chart Modal -->
+    <ChartModal
+      v-if="accountData?.account?.id"
+      :show="chartModal.show"
+      :type="chartModal.type"
+      :accountId="accountData.account.id"
+      :initialBalance="accountData.account?.initial_balance || 0"
+      @close="closeChartModal"
+    />
   </div>
 </template>
 

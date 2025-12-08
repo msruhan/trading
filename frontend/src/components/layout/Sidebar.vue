@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import {
   HomeIcon,
   ChartBarIcon,
+  ChartBarSquareIcon,
   CurrencyDollarIcon,
   CalendarIcon,
   DocumentTextIcon,
@@ -33,6 +34,7 @@ const navigation = [
   { name: 'Accounts', href: '/accounts', icon: BriefcaseIcon },
   { name: 'Trades', href: '/trades', icon: ChartBarIcon },
   { name: 'Add Trade', href: '/trades/new', icon: PlusCircleIcon },
+  { name: 'Chart', href: '/chart', icon: ChartBarSquareIcon },
   { name: 'Portfolio', href: '/portfolio', icon: CurrencyDollarIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarIcon },
   { name: 'News', href: '/news', icon: NewspaperIcon },

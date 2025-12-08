@@ -2,8 +2,10 @@
 
 use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\ChartAnalysisController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EABridgeController;
+use App\Http\Controllers\Api\EACommandController;
 use App\Http\Controllers\Api\ManualEntryController;
 use App\Http\Controllers\Api\NewsController;
 use App\Http\Controllers\Api\ReportController;
@@ -25,6 +27,7 @@ Route::prefix('v1')->group(function () {
 
     // EA Bridge incoming endpoint (uses custom token auth)
     Route::post('/incoming/trades', [EABridgeController::class, 'receiveTrades']);
+    Route::post('/incoming/check-data', [EABridgeController::class, 'checkDataChanged']);
     Route::get('/incoming/health', [EABridgeController::class, 'healthCheck']);
 
     // Protected routes
@@ -54,8 +57,19 @@ Route::prefix('v1')->group(function () {
         // Accounts
         Route::apiResource('accounts', AccountController::class);
         Route::post('/accounts/{account}/sync', [AccountController::class, 'sync']);
+        Route::post('/accounts/{account}/trigger-sync', [AccountController::class, 'triggerSync']);
         Route::post('/accounts/{account}/regenerate-token', [AccountController::class, 'regenerateToken']);
+        Route::post('/accounts/{account}/clear-data', [AccountController::class, 'clearData']);
         Route::get('/accounts/{account}/sync-logs', [AccountController::class, 'syncLogs']);
+        Route::get('/accounts/{account}/equity-curve', [AccountController::class, 'equityCurve']);
+
+        // EA Commands
+        Route::prefix('accounts/{account}/ea-commands')->group(function () {
+            Route::get('/', [EACommandController::class, 'index']);
+            Route::get('/pending', [EACommandController::class, 'pending']);
+            Route::post('/', [EACommandController::class, 'store']);
+        });
+        Route::put('/ea-commands/{command}/status', [EACommandController::class, 'updateStatus']);
 
         // Trades
         Route::get('/trades/open', [TradeController::class, 'openTrades']);
@@ -91,6 +105,11 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('journal', ManualEntryController::class)->parameters([
             'journal' => 'manualEntry'
         ]);
+
+        // Chart Analyses
+        Route::get('/chart-analyses', [ChartAnalysisController::class, 'index']);
+        Route::get('/chart-analyses/{symbol}/{interval}', [ChartAnalysisController::class, 'getBySymbol']);
+        Route::apiResource('chart-analyses', ChartAnalysisController::class)->except(['index']);
     });
 });
 

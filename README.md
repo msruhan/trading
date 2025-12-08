@@ -146,3 +146,5 @@ MIT License - feel free to use for personal or commercial projects.
 Contributions are welcome! Please read our contributing guidelines first.
 
 $env:Path = "C:\xampp2\php;" + ($env:Path -replace 'C:\\xampp\\php;?','') 
+
+ C:\ngrok\ngrok.exe http 8000                                                                                                                                                                                        

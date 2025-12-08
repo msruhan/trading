@@ -35,12 +35,18 @@ const props = defineProps({
   },
 })
 
-const chartData = computed(() => ({
-  labels: props.data.map(d => d.date),
+const chartData = computed(() => {
+  // Ensure data is an array and has required fields
+  const validData = Array.isArray(props.data) 
+    ? props.data.filter(d => d && d.date && (d.equity !== undefined || d.balance !== undefined))
+    : []
+  
+  return {
+    labels: validData.map(d => d.date),
   datasets: [
     {
       label: 'Equity',
-      data: props.data.map(d => d.equity),
+        data: validData.map(d => Number(d.equity) || 0),
       borderColor: '#22c55e',
       backgroundColor: 'rgba(34, 197, 94, 0.1)',
       fill: true,
@@ -53,7 +59,7 @@ const chartData = computed(() => ({
     },
     {
       label: 'Balance',
-      data: props.data.map(d => d.balance),
+        data: validData.map(d => Number(d.balance) || 0),
       borderColor: '#a855f7',
       backgroundColor: 'transparent',
       fill: false,
@@ -66,7 +72,8 @@ const chartData = computed(() => ({
       borderDash: [5, 5],
     },
   ],
-}))
+  }
+})
 
 const chartOptions = {
   responsive: true,

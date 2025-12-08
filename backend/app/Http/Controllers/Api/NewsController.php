@@ -457,7 +457,7 @@ class NewsController extends Controller
         foreach ($nullableFields as $field) {
             if (isset($data[$field]) && $data[$field] === '') {
                 $data[$field] = null;
-            }
+        }
         }
         $request->merge($data);
 

@@ -23,20 +23,28 @@ const formatDate = (date) => {
 }
 
 const formatPrice = (price, pair) => {
-  if (!price) return '-'
+  if (!price && price !== 0) return '-'
   const decimals = pair?.includes('JPY') || pair?.includes('XAU') ? 2 : 5
-  return Number(price).toFixed(decimals)
+  const numPrice = typeof price === 'string' ? parseFloat(price) : Number(price)
+  if (isNaN(numPrice)) return '-'
+  return numPrice.toFixed(decimals)
 }
 
 const formatProfit = (profit) => {
-  if (profit === null || profit === undefined) return '-'
-  const prefix = profit >= 0 ? '+' : ''
-  return `${prefix}$${profit.toFixed(2)}`
+  if (profit === null || profit === undefined || profit === '') return '-'
+  // Convert to number if it's a string
+  const numProfit = typeof profit === 'string' ? parseFloat(profit) : Number(profit)
+  if (isNaN(numProfit)) return '-'
+  const prefix = numProfit >= 0 ? '+' : ''
+  return `${prefix}$${numProfit.toFixed(2)}`
 }
 
 const profitClass = (profit) => {
-  if (profit > 0) return 'profit'
-  if (profit < 0) return 'loss'
+  if (profit === null || profit === undefined || profit === '') return ''
+  const numProfit = typeof profit === 'string' ? parseFloat(profit) : Number(profit)
+  if (isNaN(numProfit)) return ''
+  if (numProfit > 0) return 'profit'
+  if (numProfit < 0) return 'loss'
   return ''
 }
 
@@ -74,7 +82,7 @@ const typeClass = (type) => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="trade in trades" :key="trade.id">
+        <tr v-for="(trade, index) in trades" :key="`trade-${trade.id || trade.ticket || index}`">
           <td>
             <span class="font-medium text-dark-100">{{ trade.pair }}</span>
           </td>

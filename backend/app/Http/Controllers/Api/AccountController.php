@@ -9,6 +9,7 @@ use App\Models\ActivityLog;
 use App\Models\Trade;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AccountController extends Controller
 {
@@ -103,7 +104,27 @@ class AccountController extends Controller
 
         $stats = $account->getStats();
         $dailyPnL = $account->getDailyPnL(30);
-        $equityCurve = $account->getEquityCurve(30);
+        $equityCurveRaw = $account->getEquityCurve(30);
+        
+        // Transform equity curve data to match frontend format
+        // Frontend expects: [{ date: 'Y-m-d', equity: number, balance: number }]
+        $equityCurve = array_map(function ($item) {
+            // Handle both Carbon instance and string timestamp
+            $timestamp = $item['timestamp'] ?? null;
+            if ($timestamp instanceof \Carbon\Carbon) {
+                $date = $timestamp->format('Y-m-d');
+            } elseif (is_string($timestamp)) {
+                $date = date('Y-m-d', strtotime($timestamp));
+            } else {
+                $date = now()->format('Y-m-d');
+            }
+            
+            return [
+                'date' => $date,
+                'equity' => (float) ($item['equity'] ?? 0),
+                'balance' => (float) ($item['balance'] ?? 0),
+            ];
+        }, $equityCurveRaw);
         
         // Get monthly P/L (last 12 months)
         $monthlyPnL = Trade::where('account_id', $account->id)
@@ -135,6 +156,87 @@ class AccountController extends Controller
             ->limit(50)
             ->get();
 
+        // Get balance from latest successful sync log if available (most accurate)
+        // This ensures we use the exact balance/equity that was sent from EA
+        $latestSyncLog = $account->syncLogs()
+            ->where('status', 'success')
+            ->whereNotNull('payload')
+            ->orderBy('created_at', 'desc')
+            ->first();
+        
+        // If we have balance from sync log, override latestBalance with it
+        if ($latestSyncLog && isset($latestSyncLog->payload['balance'])) {
+            $balanceFromSyncLog = [
+                'balance' => (float) ($latestSyncLog->payload['balance']['balance'] ?? 0),
+                'equity' => (float) ($latestSyncLog->payload['balance']['equity'] ?? 0),
+                'margin' => (float) ($latestSyncLog->payload['balance']['margin'] ?? 0),
+                'free_margin' => (float) ($latestSyncLog->payload['balance']['free_margin'] ?? 0),
+                'margin_level' => (float) ($latestSyncLog->payload['balance']['margin_level'] ?? 0),
+            ];
+            
+            // Update ALL balance snapshots for today with correct values from sync log
+            // This ensures equity curve shows correct balance for today
+            // Delete all balance snapshots for today and create a new one with correct values
+            $today = now()->format('Y-m-d');
+            $account->balances()
+                ->whereDate('timestamp', $today)
+                ->delete();
+            
+            // Create new balance snapshot for today with correct values from sync log
+            \App\Models\Balance::create([
+                'account_id' => $account->id,
+                'timestamp' => now(),
+                'balance' => $balanceFromSyncLog['balance'],
+                'equity' => $balanceFromSyncLog['equity'],
+                'margin' => $balanceFromSyncLog['margin'],
+                'free_margin' => $balanceFromSyncLog['free_margin'],
+                'margin_level' => $balanceFromSyncLog['margin_level'],
+                'floating_pl' => $balanceFromSyncLog['equity'] - $balanceFromSyncLog['balance'],
+                'open_trades_count' => 0,
+            ]);
+            
+            // Override latestBalance with values from sync log (most accurate)
+            if ($account->latestBalance) {
+                $account->latestBalance->balance = $balanceFromSyncLog['balance'];
+                $account->latestBalance->equity = $balanceFromSyncLog['equity'];
+                $account->latestBalance->margin = $balanceFromSyncLog['margin'];
+                $account->latestBalance->free_margin = $balanceFromSyncLog['free_margin'];
+                $account->latestBalance->margin_level = $balanceFromSyncLog['margin_level'];
+            } else {
+                // Create a temporary balance object if latestBalance doesn't exist
+                $account->setRelation('latestBalance', new \App\Models\Balance([
+                    'balance' => $balanceFromSyncLog['balance'],
+                    'equity' => $balanceFromSyncLog['equity'],
+                    'margin' => $balanceFromSyncLog['margin'],
+                    'free_margin' => $balanceFromSyncLog['free_margin'],
+                    'margin_level' => $balanceFromSyncLog['margin_level'],
+                ]));
+            }
+            
+            // Reload equity curve to get updated balance for today
+            $equityCurveRaw = $account->getEquityCurve(30);
+            $equityCurve = array_map(function ($item) {
+                $timestamp = $item['timestamp'] ?? null;
+                if ($timestamp instanceof \Carbon\Carbon) {
+                    $date = $timestamp->format('Y-m-d');
+                } elseif (is_string($timestamp)) {
+                    $date = date('Y-m-d', strtotime($timestamp));
+                } else {
+                    $date = now()->format('Y-m-d');
+                }
+                
+                return [
+                    'date' => $date,
+                    'equity' => (float) ($item['equity'] ?? 0),
+                    'balance' => (float) ($item['balance'] ?? 0),
+                ];
+            }, $equityCurveRaw);
+        }
+
+        // Get period stats and account info
+        $periodStats = $account->getPeriodStats();
+        $accountInfo = $account->getAccountInfo();
+
         return response()->json([
             'account' => $account,
             'stats' => $stats,
@@ -142,6 +244,25 @@ class AccountController extends Controller
             'equity_curve' => $equityCurve,
             'monthly_pnl' => $monthlyPnL,
             'recent_trades' => $recentTrades,
+            'period_stats' => $periodStats,
+            'account_info' => $accountInfo,
+        ]);
+    }
+    
+    /**
+     * Get equity curve data for a specific month.
+     */
+    public function equityCurve(Request $request, Account $account): JsonResponse
+    {
+        $this->authorize('view', $account);
+        
+        $year = $request->input('year', now()->year);
+        $month = $request->input('month', now()->month);
+        
+        $data = $account->getEquityCurveForMonth((int) $year, (int) $month);
+        
+        return response()->json([
+            'data' => $data,
         ]);
     }
 
@@ -217,6 +338,56 @@ class AccountController extends Controller
     }
 
     /**
+     * Trigger EA sync now (for on-demand sync mode).
+     */
+    public function triggerSync(Request $request, Account $account): JsonResponse
+    {
+        $this->authorize('update', $account);
+
+        try {
+            // Check if column exists before updating
+            $columns = DB::select("SHOW COLUMNS FROM `accounts` LIKE 'sync_requested_at'");
+            
+            if (empty($columns)) {
+                // Column doesn't exist, create it
+                DB::statement("ALTER TABLE `accounts` ADD COLUMN `sync_requested_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_sync_at`");
+            }
+            
+            // Set sync_requested_at flag - EA will check this and sync when ready
+            $account->update(['sync_requested_at' => now()]);
+
+            ActivityLog::logSync('ea_sync_triggered', $account, 'EA sync triggered from web');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Sync request sent to EA. The EA will sync on the next check.',
+            ]);
+        } catch (\Exception $e) {
+            // If column doesn't exist and we can't create it, try to create it manually
+            try {
+                DB::statement("ALTER TABLE `accounts` ADD COLUMN `sync_requested_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_sync_at`");
+                $account->refresh(); // Refresh to get the new column
+                $account->update(['sync_requested_at' => now()]);
+                
+                ActivityLog::logSync('ea_sync_triggered', $account, 'EA sync triggered from web');
+                
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Sync request sent to EA. The EA will sync on the next check. (Column was auto-created)',
+                ]);
+            } catch (\Exception $e2) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to trigger sync. Please run the SQL migration manually.',
+                    'sql_command' => 'ALTER TABLE `accounts` ADD COLUMN `sync_requested_at` TIMESTAMP NULL DEFAULT NULL AFTER `last_sync_at`',
+                    'error' => $e2->getMessage(),
+                    'instructions' => 'Open phpMyAdmin, select your database, go to SQL tab, and run the SQL command above.',
+                ], 500);
+            }
+        }
+    }
+
+    /**
      * Regenerate API token for EA Bridge.
      */
     public function regenerateToken(Request $request, Account $account): JsonResponse
@@ -245,6 +416,60 @@ class AccountController extends Controller
             ->paginate(20);
 
         return response()->json($logs);
+    }
+
+    /**
+     * Clear all data for an account (trades, balances, sync logs).
+     * This allows user to start fresh and sync again.
+     */
+    public function clearData(Request $request, Account $account): JsonResponse
+    {
+        $this->authorize('update', $account);
+
+        try {
+            \DB::beginTransaction();
+
+            // Delete all trades
+            $tradesCount = $account->trades()->count();
+            $account->trades()->delete();
+
+            // Delete all balance snapshots
+            $balancesCount = $account->balances()->count();
+            $account->balances()->delete();
+
+            // Delete all sync logs
+            $syncLogsCount = $account->syncLogs()->count();
+            $account->syncLogs()->delete();
+
+            // Reset account status
+            $account->update([
+                'status' => 'active',
+                'last_sync_at' => null,
+                'error_message' => null,
+            ]);
+
+            \DB::commit();
+
+            ActivityLog::log('account', 'clear_data', "Cleared all account data: {$tradesCount} trades, {$balancesCount} balances, {$syncLogsCount} sync logs", $account);
+
+            return response()->json([
+                'message' => 'All account data cleared successfully',
+                'deleted' => [
+                    'trades' => $tradesCount,
+                    'balances' => $balancesCount,
+                    'sync_logs' => $syncLogsCount,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            \DB::rollBack();
+
+            ActivityLog::log('account', 'clear_data_failed', 'Failed to clear account data: ' . $e->getMessage(), $account);
+
+            return response()->json([
+                'error' => 'Failed to clear data',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 }
 

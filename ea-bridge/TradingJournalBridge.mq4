@@ -13,16 +13,34 @@ input string   API_URL = "https://ghislaine-boundless-billye.ngrok-free.dev/api/
 // Alternative: Use localhost if ngrok fails: "http://127.0.0.1:8000/api/v1/incoming/trades"
 input string   API_TOKEN = "2df47a53914c0dfb545a472ce813d74f4b2d07c788b1765ac3b90848c8fa2ac1";  // Generated token
 input int      ACCOUNT_ID = 8;                                               // Account ID from Dashboard
-input int      SYNC_INTERVAL_SECONDS = 60;                                   // Sync interval (seconds)
+input int      SYNC_INTERVAL_SECONDS = 60;                                   // Sync interval for normal sync (seconds)
 input bool     SYNC_HISTORY = true;                                           // Sync historical trades (ENABLED - limited to prevent large payload)
 input int      HISTORY_DAYS = 7;                                              // Days of history to sync (start with 7 days)
 input int      MAX_HISTORY_TRADES = 30;                                       // Max history trades per sync (ngrok free tier limit ~500KB)
+input int      HISTORY_SYNC_INTERVAL_SECONDS = 5;                             // Fast sync interval when syncing history batches (seconds)
+input bool     INTERCEPT_ALL_TRADING = false;                                  // Intercept ALL trading on this account (true) or specific magic numbers (false)
+input int      TARGET_MAGIC_BUY = 0;                                           // Magic number for BUY orders of EA to control (0 = all, ignored if INTERCEPT_ALL_TRADING = true)
+input int      TARGET_MAGIC_SELL = 0;                                          // Magic number for SELL orders of EA to control (0 = all, ignored if INTERCEPT_ALL_TRADING = true)
+input bool     SYNC_ON_DEMAND = true;                                          // Sync only when triggered from web (true) or auto-sync (false)
 
 //--- Global variables
 datetime lastSyncTime = 0;
 int syncCounter = 0;
 int historyOffset = 0;  // Track how many history trades have been synced
 int lastHistoryCount = 0;  // Track how many history trades were sent in last sync
+int totalEligibleHistory = 0;  // Total eligible history trades to sync
+bool isSyncingHistory = false;  // Flag to indicate if we're still syncing history batches
+int pendingHistoryOffset = 0;  // Temporary offset that will be saved after successful API call
+int secondsSinceLastSync = 0;  // Manual counter for seconds since last sync (works even when market is closed)
+bool hasSyncedBefore = false;  // Track if EA has ever synced before (first time sync)
+bool syncRequested = false;  // Track if sync was requested from web
+
+//--- Trading Control variables
+bool isPaused = false;  // Pause trading flag (prevents other EAs from opening positions)
+int scheduleDays[7] = {0, 0, 0, 0, 0, 0, 0};  // Schedule days (0=disabled, 1=enabled) [Monday=0, Sunday=6]
+string scheduleStartTime = "";  // Schedule start time (HH:MM format)
+string scheduleEndTime = "";  // Schedule end time (HH:MM format)
+bool scheduleActive = false;  // Whether schedule is currently active
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -36,12 +54,17 @@ int OnInit()
    }
    
    Print("TradingJournalBridge: Initialized for Account ID ", ACCOUNT_ID);
-   Print("TradingJournalBridge: Sync interval: ", SYNC_INTERVAL_SECONDS, " seconds");
+   Print("TradingJournalBridge: Normal sync interval: ", SYNC_INTERVAL_SECONDS, " seconds");
    Print("TradingJournalBridge: Using NGROK - History sync: ", (SYNC_HISTORY ? "ENABLED" : "DISABLED"));
    if(SYNC_HISTORY)
    {
       Print("TradingJournalBridge: History settings - Days: ", HISTORY_DAYS, ", Max trades per batch: ", MAX_HISTORY_TRADES);
+      Print("TradingJournalBridge: Fast sync interval for history batches: ", HISTORY_SYNC_INTERVAL_SECONDS, " seconds");
       Print("TradingJournalBridge: Incremental sync enabled - will sync in batches");
+      
+      // Set timer to check sync interval every second (for fast sync support)
+      EventSetTimer(1);
+      Print("TradingJournalBridge: Timer set to 1 second for interval checking");
       
       // Load history offset from Global Variables
       string gvKey = "TJ_HistoryOffset_" + IntegerToString(ACCOUNT_ID);
@@ -55,10 +78,144 @@ int OnInit()
          historyOffset = 0;
          Print("TradingJournalBridge: Starting fresh history sync from beginning");
       }
+      
+      // Load sync flag from Global Variables
+      string flagKey = "TJ_IsSyncingHistory_" + IntegerToString(ACCOUNT_ID);
+      if(GlobalVariableCheck(flagKey))
+      {
+         isSyncingHistory = (GlobalVariableGet(flagKey) > 0.5);
+         Print("TradingJournalBridge: Resumed sync flag: ", (isSyncingHistory ? "true (fast sync)" : "false (normal sync)"));
+      }
+      else
+      {
+         // If offset > 0, we're still syncing history, so use fast interval
+         if(historyOffset > 0)
+         {
+            isSyncingHistory = true;
+            Print("TradingJournalBridge: History sync in progress - using fast interval (", HISTORY_SYNC_INTERVAL_SECONDS, "s)");
+         }
+         else
+         {
+            isSyncingHistory = true; // Start with fast sync for first batch
+            Print("TradingJournalBridge: Starting with fast sync interval (", HISTORY_SYNC_INTERVAL_SECONDS, "s)");
+         }
+      }
+      
+      // Set timer to check sync interval every second (for fast sync support)
+      EventSetTimer(1);
+      Print("TradingJournalBridge: Timer set to 1 second for interval checking");
+   }
+   else
+   {
+      // Set timer even if history sync is disabled, for normal sync
+      EventSetTimer(1);
+      Print("TradingJournalBridge: Timer set to 1 second for interval checking");
    }
    
-   // Perform initial sync
-   SyncTrades();
+   // Initialize counters
+   lastSyncTime = 0;
+   secondsSinceLastSync = 0;  // Will be incremented by OnTimer
+   
+   // Load sync state from Global Variables
+   string hasSyncedKey = "TJ_HasSynced_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(hasSyncedKey))
+   {
+      hasSyncedBefore = (GlobalVariableGet(hasSyncedKey) > 0.5);
+      Print("TradingJournalBridge: Has synced before: ", (hasSyncedBefore ? "YES" : "NO"));
+   }
+   else
+   {
+      hasSyncedBefore = false;
+      Print("TradingJournalBridge: First time attach - will wait for web trigger (SYNC_ON_DEMAND mode)");
+   }
+   
+   if(SYNC_ON_DEMAND)
+   {
+      Print("TradingJournalBridge: SYNC_ON_DEMAND mode ENABLED - will only sync when triggered from web (even on first time)");
+   }
+   else
+   {
+      Print("TradingJournalBridge: Auto-sync mode ENABLED - will sync automatically every ", SYNC_INTERVAL_SECONDS, " seconds");
+   }
+   
+   // Load pause and schedule state from Global Variables
+   LoadPauseState();
+   LoadScheduleState();
+   
+   // Load target magic numbers from Global Variables (if set via command)
+   string magicBuyGvKey = "TJ_TargetMagicBuy_" + IntegerToString(ACCOUNT_ID);
+   string magicSellGvKey = "TJ_TargetMagicSell_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(magicBuyGvKey))
+   {
+      int loadedMagicBuy = (int)GlobalVariableGet(magicBuyGvKey);
+      if(loadedMagicBuy > 0 && loadedMagicBuy != TARGET_MAGIC_BUY)
+      {
+         Print("TradingJournalBridge: WARNING - Target magic BUY from Global Variables (", loadedMagicBuy, ") differs from input parameter (", TARGET_MAGIC_BUY, ")");
+         Print("TradingJournalBridge: Using Global Variable value: ", loadedMagicBuy);
+      }
+   }
+   if(GlobalVariableCheck(magicSellGvKey))
+   {
+      int loadedMagicSell = (int)GlobalVariableGet(magicSellGvKey);
+      if(loadedMagicSell > 0 && loadedMagicSell != TARGET_MAGIC_SELL)
+      {
+         Print("TradingJournalBridge: WARNING - Target magic SELL from Global Variables (", loadedMagicSell, ") differs from input parameter (", TARGET_MAGIC_SELL, ")");
+         Print("TradingJournalBridge: Using Global Variable value: ", loadedMagicSell);
+      }
+   }
+   
+   // Check if intercept all trading mode is enabled
+   bool interceptAll = INTERCEPT_ALL_TRADING;
+   string interceptAllGvKey = "TJ_InterceptAll_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(interceptAllGvKey))
+   {
+      interceptAll = (GlobalVariableGet(interceptAllGvKey) > 0.5);
+   }
+   
+   if(interceptAll)
+   {
+      Print("TradingJournalBridge: =========================================");
+      Print("TradingJournalBridge: INTERCEPT ALL TRADING MODE ENABLED");
+      Print("TradingJournalBridge: Will intercept ALL trading on this account");
+      Print("TradingJournalBridge: (Magic BUY/SELL parameters are ignored)");
+      Print("TradingJournalBridge: =========================================");
+   }
+   else if(TARGET_MAGIC_BUY > 0 || TARGET_MAGIC_SELL > 0)
+   {
+      Print("TradingJournalBridge: Will intercept EA with Magic BUY: ", TARGET_MAGIC_BUY, ", Magic SELL: ", TARGET_MAGIC_SELL);
+   }
+   else
+   {
+      Print("TradingJournalBridge: Will intercept ALL EAs (Magic BUY/SELL: 0 = all)");
+   }
+   
+   if(isPaused)
+   {
+      Print("TradingJournalBridge: Trading is PAUSED");
+   }
+   else
+   {
+      Print("TradingJournalBridge: Trading is ACTIVE");
+   }
+   
+   // NEVER sync automatically in on-demand mode - always wait for web trigger
+   // Even on first time, must wait for trigger from web
+   if(!SYNC_ON_DEMAND)
+   {
+      Print("TradingJournalBridge: Starting initial sync (auto-sync mode)...");
+      SyncTrades();
+   }
+   else
+   {
+      Print("TradingJournalBridge: =========================================");
+      Print("TradingJournalBridge: SYNC_ON_DEMAND mode - WAITING for trigger");
+      Print("TradingJournalBridge: =========================================");
+      Print("TradingJournalBridge: EA is ready but will NOT sync automatically");
+      Print("TradingJournalBridge: Please click 'Sync Now' button on the website");
+      Print("TradingJournalBridge: EA will check for sync request every 10 seconds");
+      Print("TradingJournalBridge: =========================================");
+      // DO NOT call SyncTrades() here - wait for web trigger
+   }
    
    return(INIT_SUCCEEDED);
 }
@@ -68,12 +225,19 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Kill timer
+   EventKillTimer();
+   
    // Save history offset before EA stops
    if(SYNC_HISTORY)
    {
       string gvKey = "TJ_HistoryOffset_" + IntegerToString(ACCOUNT_ID);
       GlobalVariableSet(gvKey, historyOffset);
       Print("TradingJournalBridge: Saved history offset: ", historyOffset, " before deinitialization");
+      
+      // Also save sync flag
+      string flagKey = "TJ_IsSyncingHistory_" + IntegerToString(ACCOUNT_ID);
+      GlobalVariableSet(flagKey, isSyncingHistory ? 1.0 : 0.0);
    }
    
    Print("TradingJournalBridge: Deinitialized. Total syncs: ", syncCounter);
@@ -84,19 +248,143 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Check if it's time to sync
-   if(TimeCurrent() - lastSyncTime >= SYNC_INTERVAL_SECONDS)
+   // Determine sync interval based on whether we're still syncing history
+   int currentSyncInterval = SYNC_INTERVAL_SECONDS;
+   
+   if(SYNC_HISTORY && isSyncingHistory)
    {
+      // Use faster interval when syncing history batches
+      currentSyncInterval = HISTORY_SYNC_INTERVAL_SECONDS;
+   }
+   
+   // Check if it's time to sync
+   int timeSinceLastSync = (int)(TimeCurrent() - lastSyncTime);
+   if(timeSinceLastSync >= currentSyncInterval)
+   {
+      Print("TradingJournalBridge: Time to sync! Last sync: ", timeSinceLastSync, "s ago, Interval: ", currentSyncInterval, "s, isSyncingHistory: ", isSyncingHistory);
       SyncTrades();
    }
 }
 
 //+------------------------------------------------------------------+
-//| Timer function (alternative to OnTick for less frequent updates)   |
+//| Timer function (called every second for interval checking)        |
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   SyncTrades();
+   // OnTimer is called every second (set in OnInit)
+   // This ensures sync happens even when market is closed or no ticks occur
+   
+   // Increment manual counter (works even when market is closed)
+   secondsSinceLastSync++;
+   
+   // Monitor and control other EAs (intercept trading)
+   MonitorAndControlTrading();
+   
+   // Determine sync interval based on whether we're still syncing history
+   int currentSyncInterval = SYNC_INTERVAL_SECONDS;
+   
+   if(SYNC_HISTORY && isSyncingHistory)
+   {
+      // Use faster interval when syncing history batches
+      currentSyncInterval = HISTORY_SYNC_INTERVAL_SECONDS;
+   }
+   
+   // Debug logging every 5 seconds to show timer is working
+   static int lastDebugTime = 0;
+   if(secondsSinceLastSync - lastDebugTime >= 5)
+   {
+      Print("TradingJournalBridge: [OnTimer] Timer active. Last sync: ", secondsSinceLastSync, "s ago, Interval: ", currentSyncInterval, "s, isSyncingHistory: ", isSyncingHistory, ", historyOffset: ", historyOffset);
+      Print("TradingJournalBridge: [OnTimer] TimeCurrent: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS), ", TimeLocal: ", TimeToString(TimeLocal(), TIME_DATE|TIME_SECONDS));
+      lastDebugTime = secondsSinceLastSync;
+   }
+   
+   // Check if sync should be triggered
+   bool shouldSync = false;
+   
+   if(SYNC_ON_DEMAND)
+   {
+      // In on-demand mode, only sync if sync was requested from web
+      // Even on first time, must wait for trigger from web
+      // BUT: If we're syncing history batches, continue syncing automatically until done
+      if(isSyncingHistory && SYNC_HISTORY)
+      {
+         // We're in the middle of syncing history batches - continue automatically
+         // Don't check for sync request, just sync based on interval
+         if(secondsSinceLastSync >= currentSyncInterval)
+         {
+            shouldSync = true;
+            Print("TradingJournalBridge: [OnTimer] History sync in progress - continuing batch sync (interval: ", currentSyncInterval, "s)");
+         }
+      }
+      else if(syncRequested)
+      {
+         // Sync was requested from web - trigger sync
+         shouldSync = true;
+         Print("TradingJournalBridge: [OnTimer] Sync requested from web - triggering sync");
+      }
+      else
+      {
+         // Check for sync request from web by calling health check endpoint
+         // This allows EA to check sync_requested status without doing full sync
+         static datetime lastCheckTime = 0;
+         static bool firstCheckDone = false;
+         
+         // Wait at least 10 seconds after OnInit before first check (give time for EA to fully initialize)
+         if(!firstCheckDone)
+         {
+            // Initialize lastCheckTime to current time on first OnTimer call
+            if(lastCheckTime == 0)
+            {
+               lastCheckTime = TimeCurrent();
+               Print("TradingJournalBridge: [OnTimer] Initialized - will start checking for sync request in 10 seconds");
+            }
+            // Wait 10 seconds before first check
+            else if(TimeCurrent() - lastCheckTime >= 10)
+            {
+               firstCheckDone = true;
+               lastCheckTime = TimeCurrent();
+               Print("TradingJournalBridge: [OnTimer] Starting to check for sync request from web...");
+            }
+         }
+         
+         // Check every 10 seconds (after initial 10 second wait)
+         if(firstCheckDone && TimeCurrent() - lastCheckTime >= 10)
+         {
+            lastCheckTime = TimeCurrent();
+            if(CheckSyncRequest())
+            {
+               syncRequested = true;
+               shouldSync = true;
+               Print("TradingJournalBridge: [OnTimer] Sync request detected from web - triggering sync NOW");
+            }
+            else
+            {
+               // Log status every 30 seconds to show EA is waiting
+               static datetime lastStatusLog = 0;
+               if(TimeCurrent() - lastStatusLog >= 30)
+               {
+                  lastStatusLog = TimeCurrent();
+                  Print("TradingJournalBridge: [OnTimer] Status: WAITING for sync trigger from web (checking every 10s)");
+               }
+            }
+         }
+      }
+   }
+   else
+   {
+      // Auto-sync mode: sync based on interval
+      if(secondsSinceLastSync >= currentSyncInterval)
+      {
+         shouldSync = true;
+         Print("TradingJournalBridge: [OnTimer] Time to sync! Last sync: ", secondsSinceLastSync, "s ago, Interval: ", currentSyncInterval, "s, isSyncingHistory: ", isSyncingHistory);
+         Print("TradingJournalBridge: [OnTimer] TimeCurrent: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS), ", TimeLocal: ", TimeToString(TimeLocal(), TIME_DATE|TIME_SECONDS));
+      }
+   }
+   
+   if(shouldSync)
+   {
+      SyncTrades();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -104,8 +392,123 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void SyncTrades()
 {
-   lastSyncTime = TimeCurrent();
    syncCounter++;
+   
+   // First, calculate total eligible history to determine if we're still syncing
+   int localTotalEligibleHistory = 0;
+   if(SYNC_HISTORY)
+   {
+      datetime startDate = TimeCurrent() - (HISTORY_DAYS * 24 * 60 * 60);
+      for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+      {
+         if(OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+         {
+            if(OrderCloseTime() >= startDate)
+            {
+               localTotalEligibleHistory++;
+            }
+         }
+      }
+      totalEligibleHistory = localTotalEligibleHistory;
+   }
+   
+   // Check if we're still syncing history batches - if so, skip hash check and force sync
+   bool skipHashCheck = false;
+   if(SYNC_HISTORY && isSyncingHistory && historyOffset < totalEligibleHistory && totalEligibleHistory > 0)
+   {
+      // Still syncing history batches - don't skip sync even if hash matches
+      skipHashCheck = true;
+      Print("TradingJournalBridge: History sync in progress (offset: ", historyOffset, " / ", totalEligibleHistory, ") - will sync regardless of hash");
+   }
+   
+   // First, check if data has changed by sending data hash (unless we're syncing history)
+   string checkResponse = "";
+   bool forceSync = false;
+   if(!skipHashCheck)
+   {
+      string dataHash = CalculateDataHash();
+      Print("TradingJournalBridge: Data hash: ", dataHash);
+      
+      // Check if data has changed
+      checkResponse = CheckDataChanged(dataHash);
+      if(checkResponse != "")
+      {
+         // Check for force_sync flag (after clear data or sync requested)
+         int forceSyncPos = StringFind(checkResponse, "\"force_sync\":");
+         if(forceSyncPos >= 0)
+         {
+            int forceSyncStart = StringFind(checkResponse, ":", forceSyncPos) + 1;
+            int forceSyncEnd = StringFind(checkResponse, ",", forceSyncStart);
+            if(forceSyncEnd < 0) forceSyncEnd = StringFind(checkResponse, "}", forceSyncStart);
+            string forceSyncStr = StringSubstr(checkResponse, forceSyncStart, forceSyncEnd - forceSyncStart);
+            StringReplace(forceSyncStr, " ", "");
+            if(StringFind(forceSyncStr, "true") >= 0)
+            {
+               forceSync = true;
+               Print("TradingJournalBridge: Force sync detected - will sync regardless of data hash");
+               
+               // Reset history offset if force sync (after clear data)
+               int hasNoDataPos = StringFind(checkResponse, "\"has_no_data\":");
+               if(hasNoDataPos >= 0)
+               {
+                  int hasNoDataStart = StringFind(checkResponse, ":", hasNoDataPos) + 1;
+                  int hasNoDataEnd = StringFind(checkResponse, ",", hasNoDataStart);
+                  if(hasNoDataEnd < 0) hasNoDataEnd = StringFind(checkResponse, "}", hasNoDataStart);
+                  string hasNoDataStr = StringSubstr(checkResponse, hasNoDataStart, hasNoDataEnd - hasNoDataStart);
+                  StringReplace(hasNoDataStr, " ", "");
+                  if(StringFind(hasNoDataStr, "true") >= 0)
+                  {
+                     // Reset history offset and sync flags
+                     historyOffset = 0;
+                     hasSyncedBefore = false;
+                     isSyncingHistory = false; // Reset sync flag to prevent infinite loop
+                     string gvKey = "TJ_HistoryOffset_" + IntegerToString(ACCOUNT_ID);
+                     GlobalVariableDel(gvKey);
+                     string hasSyncedKey = "TJ_HasSynced_" + IntegerToString(ACCOUNT_ID);
+                     GlobalVariableDel(hasSyncedKey);
+                     string flagKey = "TJ_IsSyncingHistory_" + IntegerToString(ACCOUNT_ID);
+                     GlobalVariableDel(flagKey);
+                     Print("TradingJournalBridge: Account has no data - reset history offset and sync flags");
+                     Print("TradingJournalBridge: isSyncingHistory reset to false to start fresh");
+                  }
+               }
+            }
+         }
+         
+         // Parse response to check if data has changed (only if not force sync and not syncing history)
+         if(!forceSync && !skipHashCheck)
+         {
+            int noChangesPos = StringFind(checkResponse, "\"no_changes\":");
+            if(noChangesPos >= 0)
+            {
+               int noChangesStart = StringFind(checkResponse, ":", noChangesPos) + 1;
+               int noChangesEnd = StringFind(checkResponse, ",", noChangesStart);
+               if(noChangesEnd < 0) noChangesEnd = StringFind(checkResponse, "}", noChangesStart);
+               string noChangesStr = StringSubstr(checkResponse, noChangesStart, noChangesEnd - noChangesStart);
+               StringReplace(noChangesStr, " ", "");
+               if(StringFind(noChangesStr, "true") >= 0)
+               {
+                  Print("TradingJournalBridge: Data unchanged - skipping sync");
+                  // Still process commands if any
+                  ProcessCommands(checkResponse);
+                  // Reset counter even if no sync
+                  secondsSinceLastSync = 0;
+                  lastSyncTime = TimeLocal();
+                  return;
+               }
+            }
+         }
+      }
+   }
+   
+   // Process commands from check response if available
+   if(checkResponse != "")
+   {
+      ProcessCommands(checkResponse);
+   }
+   
+   // Data has changed or check failed - proceed with full sync
+   Print("TradingJournalBridge: Data changed or first sync - proceeding with full sync");
    
    // Build JSON payload
    string json = BuildPayload();
@@ -133,18 +536,184 @@ void SyncTrades()
    {
       Print("TradingJournalBridge: Sync #", syncCounter, " completed. Response: ", StringSubstr(response, 0, 200));
       
-      // Save history offset to Global Variables after successful sync
-      if(SYNC_HISTORY && lastHistoryCount > 0)
+      // Check if sync was requested from web
+      int syncRequestedPos = StringFind(response, "\"sync_requested\":");
+      if(syncRequestedPos >= 0)
       {
+         int syncRequestedStart = StringFind(response, ":", syncRequestedPos) + 1;
+         int syncRequestedEnd = StringFind(response, ",", syncRequestedStart);
+         if(syncRequestedEnd < 0) syncRequestedEnd = StringFind(response, "}", syncRequestedStart);
+         string syncRequestedStr = StringSubstr(response, syncRequestedStart, syncRequestedEnd - syncRequestedStart);
+         StringReplace(syncRequestedStr, " ", "");
+         if(StringFind(syncRequestedStr, "true") >= 0)
+         {
+            syncRequested = false; // Clear flag after processing
+            Print("TradingJournalBridge: Sync was requested from web - processed successfully");
+         }
+      }
+      
+      // Process commands from response
+      ProcessCommands(response);
+      
+      // Mark as synced before
+      if(!hasSyncedBefore)
+      {
+         hasSyncedBefore = true;
+         string hasSyncedKey = "TJ_HasSynced_" + IntegerToString(ACCOUNT_ID);
+         GlobalVariableSet(hasSyncedKey, 1.0);
+         Print("TradingJournalBridge: First sync completed - marked as synced");
+      }
+      
+      // Reset manual counter AFTER successful sync
+      secondsSinceLastSync = 0;
+      
+      // Also update lastSyncTime for reference (using TimeLocal for reliability)
+      lastSyncTime = TimeLocal();
+      Print("TradingJournalBridge: Reset sync counter. TimeLocal: ", TimeToString(lastSyncTime, TIME_DATE|TIME_SECONDS), ", TimeCurrent: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+      
+      // Save history offset and sync flag to Global Variables after successful sync
+      if(SYNC_HISTORY)
+      {
+         // Update historyOffset with pending offset (calculated in BuildPayload)
+         historyOffset = pendingHistoryOffset;
+         
+         // Check if we've completed all history
+         if(historyOffset >= totalEligibleHistory && totalEligibleHistory > 0)
+         {
+            Print("TradingJournalBridge: All history trades synced! (", totalEligibleHistory, " total)");
+            Print("TradingJournalBridge: Resetting offset to 0 for next cycle");
+            historyOffset = 0;
+            isSyncingHistory = false; // Switch to normal sync interval
+            // Clear syncRequested flag now that history sync is complete
+            if(SYNC_ON_DEMAND)
+            {
+               syncRequested = false;
+               Print("TradingJournalBridge: History sync complete - cleared syncRequested flag");
+            }
+            Print("TradingJournalBridge: Switching to normal sync interval (", SYNC_INTERVAL_SECONDS, "s)");
+         }
+         else if(historyOffset < totalEligibleHistory && totalEligibleHistory > 0)
+         {
+            Print("TradingJournalBridge: History sync in progress. Offset: ", historyOffset, " / ", totalEligibleHistory);
+            isSyncingHistory = true; // Continue fast sync
+            Print("TradingJournalBridge: Next batch will sync in ", HISTORY_SYNC_INTERVAL_SECONDS, " seconds");
+            Print("TradingJournalBridge: IMPORTANT - Will skip hash check on next sync to continue history batches");
+         }
+         else if(totalEligibleHistory == 0)
+         {
+            // No history trades at all
+            Print("TradingJournalBridge: No history trades found. Switching to normal sync interval.");
+            isSyncingHistory = false;
+            // Clear syncRequested flag if no history to sync
+            if(SYNC_ON_DEMAND)
+            {
+               syncRequested = false;
+               Print("TradingJournalBridge: No history to sync - cleared syncRequested flag");
+            }
+         }
+         
+         // Save to Global Variables
          string gvKey = "TJ_HistoryOffset_" + IntegerToString(ACCOUNT_ID);
          GlobalVariableSet(gvKey, historyOffset);
          Print("TradingJournalBridge: Saved history offset: ", historyOffset);
+         
+         // Also save sync flag
+         string flagKey = "TJ_IsSyncingHistory_" + IntegerToString(ACCOUNT_ID);
+         GlobalVariableSet(flagKey, isSyncingHistory ? 1.0 : 0.0);
+         Print("TradingJournalBridge: Saved sync flag: ", (isSyncingHistory ? "true (fast sync)" : "false (normal sync)"));
       }
    }
    else
    {
       Print("TradingJournalBridge: Sync #", syncCounter, " failed - offset not updated, will retry same batch");
-      // Don't update offset if sync failed - will retry same batch next time
+      // Don't update lastSyncTime or offset if sync failed - will retry same batch next time
+      // But still update lastSyncTime to prevent immediate retry
+      lastSyncTime = TimeCurrent();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate hash of current data (balance + open trades summary)    |
+//+------------------------------------------------------------------+
+string CalculateDataHash()
+{
+   // Build a simple hash string from balance and open trades
+   string hashStr = "";
+   
+   // Add balance info
+   hashStr += DoubleToString(AccountBalance(), 2);
+   hashStr += "|";
+   hashStr += DoubleToString(AccountEquity(), 2);
+   hashStr += "|";
+   hashStr += DoubleToString(AccountMargin(), 2);
+   hashStr += "|";
+   
+   // Add open trades summary (ticket + profit)
+   int openTradesCount = 0;
+   double totalOpenProfit = 0;
+   string openTickets = "";
+   
+   for(int i = 0; i < OrdersTotal(); i++)
+   {
+      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+      {
+         openTradesCount++;
+         totalOpenProfit += OrderProfit();
+         if(StringLen(openTickets) > 0) openTickets += ",";
+         openTickets += IntegerToString(OrderTicket()) + ":" + DoubleToString(OrderProfit(), 2);
+      }
+   }
+   
+   hashStr += IntegerToString(openTradesCount);
+   hashStr += "|";
+   hashStr += DoubleToString(totalOpenProfit, 2);
+   hashStr += "|";
+   hashStr += openTickets;
+   
+   // Simple hash: just return the hash string (backend will compare)
+   // In a real implementation, you might want to use a hash function
+   return hashStr;
+}
+
+//+------------------------------------------------------------------+
+//| Check if data has changed by sending hash to backend             |
+//+------------------------------------------------------------------+
+string CheckDataChanged(string dataHash)
+{
+   string checkUrl = StringSubstr(API_URL, 0, StringFind(API_URL, "/incoming")) + "/incoming/check-data";
+   
+   string json = "{";
+   json += "\"data_hash\":\"" + dataHash + "\"";
+   json += "}";
+   
+   string headers = "";
+   headers += "Content-Type: application/json\r\n";
+   headers += "Accept: application/json\r\n";
+   if(StringFind(API_URL, "ngrok") >= 0)
+   {
+      headers += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n";
+      headers += "ngrok-skip-browser-warning: true\r\n";
+   }
+   headers += "X-API-Token: " + API_TOKEN + "\r\n";
+   headers += "X-Account-ID: " + IntegerToString(ACCOUNT_ID) + "\r\n";
+   
+   char post[];
+   char result[];
+   string resultHeaders;
+   
+   StringToCharArray(json, post, 0, StringLen(json));
+   ArrayResize(post, StringLen(json));
+   
+   int response = WebRequest("POST", checkUrl, headers, 5000, post, result, resultHeaders);
+   
+   if(response == 200)
+   {
+      return CharArrayToString(result);
+   }
+   else
+   {
+      Print("TradingJournalBridge: Check data changed failed - HTTP ", response, " - will proceed with sync");
+      return "";
    }
 }
 
@@ -190,7 +759,7 @@ string BuildPayload()
    
    // Historical trades (if enabled) - INCREMENTAL SYNC with offset
    int historyCount = 0;
-   int totalEligibleHistory = 0;
+   int localTotalEligibleHistory = 0;
    
    if(SYNC_HISTORY)
    {
@@ -206,13 +775,13 @@ string BuildPayload()
             // Only count trades within date range
             if(OrderCloseTime() >= startDate)
             {
-               totalEligibleHistory++;
+               localTotalEligibleHistory++;
             }
          }
       }
       
       Print("TradingJournalBridge: Total history orders: ", totalHistory);
-      Print("TradingJournalBridge: Eligible history trades (last ", HISTORY_DAYS, " days): ", totalEligibleHistory);
+      Print("TradingJournalBridge: Eligible history trades (last ", HISTORY_DAYS, " days): ", localTotalEligibleHistory);
       Print("TradingJournalBridge: Current history offset: ", historyOffset, " (syncing batch of max ", maxHistoryTrades, " trades)");
       
       // Second pass: sync trades starting from offset
@@ -246,35 +815,73 @@ string BuildPayload()
       }
       
       Print("TradingJournalBridge: History trades added in this batch: ", historyCount);
-      Print("TradingJournalBridge: Progress: ", (historyOffset + historyCount), " / ", totalEligibleHistory, " trades synced");
+      Print("TradingJournalBridge: Progress: ", (historyOffset + historyCount), " / ", localTotalEligibleHistory, " trades synced");
       
-      // Update offset for next sync (will be saved after successful API call)
+      // Calculate next offset (will be saved after successful API call)
+      pendingHistoryOffset = historyOffset;
       if(historyCount > 0)
       {
-         historyOffset += historyCount;
+         pendingHistoryOffset = historyOffset + historyCount;
       }
       
-      // Check if we've completed syncing all history
-      if(historyOffset >= totalEligibleHistory)
+      // Update global totalEligibleHistory for interval calculation
+      totalEligibleHistory = localTotalEligibleHistory;
+      
+      // Determine if we should continue syncing history
+      // IMPORTANT: Don't update historyOffset here - it will be updated after successful API call
+      // Only set isSyncingHistory flag here - actual historyOffset will be updated after successful sync
+      if(pendingHistoryOffset >= localTotalEligibleHistory && localTotalEligibleHistory > 0)
       {
-         Print("TradingJournalBridge: All history trades synced! (", totalEligibleHistory, " total)");
-         Print("TradingJournalBridge: Resetting offset to 0 for next cycle (will re-sync all, but backend uses updateOrCreate so no duplicates)");
-         // Reset offset to 0 - next sync will start from beginning
-         // This is safe because backend uses updateOrCreate based on ticket, so no duplicates will be created
-         historyOffset = 0;
+         Print("TradingJournalBridge: All history trades will be synced after this batch! (", localTotalEligibleHistory, " total)");
+         Print("TradingJournalBridge: After sync, will reset offset to 0 and switch to normal interval");
+         // Will be set to false after successful sync
+         isSyncingHistory = true; // Keep true for now, will be set to false after sync completes
       }
-      else if(historyCount >= maxHistoryTrades)
+      else if(historyCount >= maxHistoryTrades && pendingHistoryOffset < localTotalEligibleHistory)
       {
-         Print("TradingJournalBridge: Batch limit reached. Next sync will continue from offset ", historyOffset);
-         Print("TradingJournalBridge: Remaining trades to sync: ", (totalEligibleHistory - historyOffset));
+         // Batch limit reached but still have more to sync
+         Print("TradingJournalBridge: Batch limit reached. Next sync will continue from offset ", pendingHistoryOffset);
+         Print("TradingJournalBridge: Remaining trades to sync: ", (localTotalEligibleHistory - pendingHistoryOffset));
+         Print("TradingJournalBridge: Will use fast sync interval (", HISTORY_SYNC_INTERVAL_SECONDS, "s) for next batch");
+         isSyncingHistory = true; // Continue fast sync for next batch
+      }
+      else if(historyCount > 0 && pendingHistoryOffset < localTotalEligibleHistory)
+      {
+         // Still have more trades to sync (even if batch not full)
+         Print("TradingJournalBridge: Still have more trades to sync (", (localTotalEligibleHistory - pendingHistoryOffset), " remaining). Setting isSyncingHistory = true");
+         isSyncingHistory = true;
+      }
+      else if(historyCount == 0 && historyOffset == 0)
+      {
+         // No history trades at all
+         Print("TradingJournalBridge: No history trades found. Switching to normal sync interval.");
+         isSyncingHistory = false;
       }
       else if(historyCount == 0 && historyOffset > 0)
       {
-         // No more trades to sync in this batch, but we haven't reached the end
-         // This shouldn't happen, but if it does, reset offset
-         Print("TradingJournalBridge: No trades in this batch, but offset > 0. Resetting offset.");
-         historyOffset = 0;
+         // No more trades in this batch, but we have offset
+         // Check if we've actually reached the end
+         if(historyOffset >= localTotalEligibleHistory)
+         {
+            Print("TradingJournalBridge: No more trades in batch, but offset (", historyOffset, ") >= total (", localTotalEligibleHistory, ") - sync complete");
+            isSyncingHistory = false; // Stop syncing
+         }
+         else
+         {
+            Print("TradingJournalBridge: WARNING - No trades in this batch, but offset (", historyOffset, ") < total (", localTotalEligibleHistory, ")");
+            Print("TradingJournalBridge: This may indicate history was changed. Will stop to prevent infinite loop.");
+            isSyncingHistory = false; // Stop to prevent infinite loop
+         }
       }
+      else
+      {
+         // Default: stop syncing if we can't determine status
+         Print("TradingJournalBridge: Cannot determine sync status. Stopping to prevent infinite loop.");
+         Print("TradingJournalBridge: historyCount: ", historyCount, ", historyOffset: ", historyOffset, ", pendingHistoryOffset: ", pendingHistoryOffset, ", localTotalEligibleHistory: ", localTotalEligibleHistory);
+         isSyncingHistory = false;
+      }
+      
+      // Store pending offset (will be saved after successful API call)
    }
    else
    {
@@ -515,6 +1122,742 @@ bool CheckAPIConnection()
    int response = WebRequest("GET", healthUrl, headers, 5000, post, result, resultHeaders);
    
    return (response == 200);
+}
+
+//+------------------------------------------------------------------+
+//| Check if sync is requested from web                               |
+//+------------------------------------------------------------------+
+bool CheckSyncRequest()
+{
+   string healthUrl = StringSubstr(API_URL, 0, StringFind(API_URL, "/incoming")) + "/incoming/health";
+   
+   string headers = "";
+   headers += "Accept: application/json\r\n";
+   if(StringFind(API_URL, "ngrok") >= 0)
+   {
+      headers += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n";
+      headers += "ngrok-skip-browser-warning: true\r\n";
+   }
+   headers += "X-API-Token: " + API_TOKEN + "\r\n";
+   headers += "X-Account-ID: " + IntegerToString(ACCOUNT_ID) + "\r\n";
+   
+   char post[];
+   char result[];
+   string resultHeaders;
+   
+   int response = WebRequest("GET", healthUrl, headers, 5000, post, result, resultHeaders);
+   
+   if(response == 200)
+   {
+      string responseText = CharArrayToString(result);
+      // Check for sync_requested flag in response
+      int syncRequestedPos = StringFind(responseText, "\"sync_requested\":");
+      if(syncRequestedPos >= 0)
+      {
+         int syncRequestedStart = StringFind(responseText, ":", syncRequestedPos) + 1;
+         int syncRequestedEnd = StringFind(responseText, ",", syncRequestedStart);
+         if(syncRequestedEnd < 0) syncRequestedEnd = StringFind(responseText, "}", syncRequestedStart);
+         string syncRequestedStr = StringSubstr(responseText, syncRequestedStart, syncRequestedEnd - syncRequestedStart);
+         StringReplace(syncRequestedStr, " ", "");
+         if(StringFind(syncRequestedStr, "true") >= 0)
+         {
+            Print("TradingJournalBridge: Sync request detected from health check");
+            return true;
+         }
+      }
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Process commands from API response                                |
+//+------------------------------------------------------------------+
+void ProcessCommands(string response)
+{
+   // Check for sync_requested flag in response
+   int syncRequestedPos = StringFind(response, "\"sync_requested\":");
+   if(syncRequestedPos >= 0)
+   {
+      int syncRequestedStart = StringFind(response, ":", syncRequestedPos) + 1;
+      int syncRequestedEnd = StringFind(response, ",", syncRequestedStart);
+      if(syncRequestedEnd < 0) syncRequestedEnd = StringFind(response, "}", syncRequestedStart);
+      string syncRequestedStr = StringSubstr(response, syncRequestedStart, syncRequestedEnd - syncRequestedStart);
+      StringReplace(syncRequestedStr, " ", "");
+      if(StringFind(syncRequestedStr, "true") >= 0)
+      {
+         syncRequested = true;
+         Print("TradingJournalBridge: Sync requested from web detected in response");
+      }
+   }
+   
+   // Parse JSON response to extract commands array
+   int commandsPos = StringFind(response, "\"commands\":[");
+   if(commandsPos < 0) return; // No commands in response
+   
+   int commandsStart = commandsPos + StringLen("\"commands\":[");
+   int commandsEnd = StringFind(response, "]", commandsStart);
+   if(commandsEnd < 0) return;
+   
+   string commandsStr = StringSubstr(response, commandsStart, commandsEnd - commandsStart);
+   
+   // Parse each command (simple parsing for JSON array)
+   int cmdStart = 0;
+   while(cmdStart < StringLen(commandsStr))
+   {
+      int cmdOpen = StringFind(commandsStr, "{", cmdStart);
+      if(cmdOpen < 0) break;
+      
+      int cmdClose = StringFind(commandsStr, "}", cmdOpen);
+      if(cmdClose < 0) break;
+      
+      string cmdJson = StringSubstr(commandsStr, cmdOpen, cmdClose - cmdOpen + 1);
+      
+      // Extract command ID
+      int idPos = StringFind(cmdJson, "\"id\":");
+      if(idPos >= 0)
+      {
+         int idStart = StringFind(cmdJson, ":", idPos) + 1;
+         int idEnd = StringFind(cmdJson, ",", idStart);
+         if(idEnd < 0) idEnd = StringFind(cmdJson, "}", idStart);
+         string cmdIdStr = StringSubstr(cmdJson, idStart, idEnd - idStart);
+         StringReplace(cmdIdStr, " ", "");
+         int cmdId = (int)StringToInteger(cmdIdStr);
+         
+         // Extract command type
+         int cmdTypePos = StringFind(cmdJson, "\"command\":\"");
+         if(cmdTypePos >= 0)
+         {
+            int cmdTypeStart = cmdTypePos + StringLen("\"command\":\"");
+            int cmdTypeEnd = StringFind(cmdJson, "\"", cmdTypeStart);
+            string cmdType = StringSubstr(cmdJson, cmdTypeStart, cmdTypeEnd - cmdTypeStart);
+            
+            Print("TradingJournalBridge: Processing command ID ", cmdId, " - Type: ", cmdType);
+            
+            // Execute command
+            ExecuteCommand(cmdId, cmdType, cmdJson);
+         }
+      }
+      
+      cmdStart = cmdClose + 1;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Execute a command                                                 |
+//+------------------------------------------------------------------+
+void ExecuteCommand(int cmdId, string cmdType, string cmdJson)
+{
+   bool success = false;
+   string result = "";
+   
+   if(cmdType == "close_all")
+   {
+      // Extract intercept_all flag from params if provided
+      bool interceptAll = false;
+      int paramsPos = StringFind(cmdJson, "\"params\":");
+      if(paramsPos >= 0)
+      {
+         int interceptAllPos = StringFind(cmdJson, "\"intercept_all\":", paramsPos);
+         if(interceptAllPos >= 0)
+         {
+            int interceptAllStart = StringFind(cmdJson, ":", interceptAllPos) + 1;
+            int interceptAllEnd = StringFind(cmdJson, ",", interceptAllStart);
+            if(interceptAllEnd < 0) interceptAllEnd = StringFind(cmdJson, "}", interceptAllStart);
+            string interceptAllStr = StringSubstr(cmdJson, interceptAllStart, interceptAllEnd - interceptAllStart);
+            StringReplace(interceptAllStr, " ", "");
+            if(StringFind(interceptAllStr, "true") >= 0)
+            {
+               interceptAll = true;
+               // Save intercept_all flag to Global Variable
+               string interceptAllGvKey = "TJ_InterceptAll_" + IntegerToString(ACCOUNT_ID);
+               GlobalVariableSet(interceptAllGvKey, 1.0);
+               Print("TradingJournalBridge: Intercept all trading enabled via command");
+            }
+         }
+      }
+      
+      // Extract magic buy and sell from params if provided (only if intercept_all is false)
+      int targetMagicBuy = TARGET_MAGIC_BUY;
+      int targetMagicSell = TARGET_MAGIC_SELL;
+      if(!interceptAll && paramsPos >= 0)
+      {
+         int magicBuyPos = StringFind(cmdJson, "\"magic_buy\":", paramsPos);
+         if(magicBuyPos >= 0)
+         {
+            int magicBuyStart = StringFind(cmdJson, ":", magicBuyPos) + 1;
+            int magicBuyEnd = StringFind(cmdJson, ",", magicBuyStart);
+            if(magicBuyEnd < 0) magicBuyEnd = StringFind(cmdJson, "}", magicBuyStart);
+            string magicBuyStr = StringSubstr(cmdJson, magicBuyStart, magicBuyEnd - magicBuyStart);
+            StringReplace(magicBuyStr, " ", "");
+            targetMagicBuy = (int)StringToInteger(magicBuyStr);
+         }
+         
+         int magicSellPos = StringFind(cmdJson, "\"magic_sell\":", paramsPos);
+         if(magicSellPos >= 0)
+         {
+            int magicSellStart = StringFind(cmdJson, ":", magicSellPos) + 1;
+            int magicSellEnd = StringFind(cmdJson, ",", magicSellStart);
+            if(magicSellEnd < 0) magicSellEnd = StringFind(cmdJson, "}", magicSellStart);
+            string magicSellStr = StringSubstr(cmdJson, magicSellStart, magicSellEnd - magicSellStart);
+            StringReplace(magicSellStr, " ", "");
+            targetMagicSell = (int)StringToInteger(magicSellStr);
+         }
+      }
+      
+      // If intercept_all is true, close all trades (magic = 0, 0)
+      if(interceptAll)
+      {
+         targetMagicBuy = 0;
+         targetMagicSell = 0;
+      }
+      
+      int closed = CloseTradesByMagicBuySell(targetMagicBuy, targetMagicSell);
+      if(closed > 0)
+      {
+         success = true;
+         result = "Closed " + IntegerToString(closed) + " trades";
+         if(targetMagicBuy > 0 || targetMagicSell > 0)
+         {
+            result += " (Magic BUY: " + IntegerToString(targetMagicBuy) + ", Magic SELL: " + IntegerToString(targetMagicSell) + ")";
+         }
+      }
+      else
+      {
+         success = true;
+         result = "No open trades to close";
+         if(targetMagicBuy > 0 || targetMagicSell > 0)
+         {
+            result += " (Magic BUY: " + IntegerToString(targetMagicBuy) + ", Magic SELL: " + IntegerToString(targetMagicSell) + ")";
+         }
+      }
+      Print("TradingJournalBridge: Command ", cmdId, " executed - ", result);
+   }
+   else if(cmdType == "pause")
+   {
+      // Extract intercept_all flag from params if provided
+      int paramsPos = StringFind(cmdJson, "\"params\":");
+      if(paramsPos >= 0)
+      {
+         int interceptAllPos = StringFind(cmdJson, "\"intercept_all\":", paramsPos);
+         if(interceptAllPos >= 0)
+         {
+            int interceptAllStart = StringFind(cmdJson, ":", interceptAllPos) + 1;
+            int interceptAllEnd = StringFind(cmdJson, ",", interceptAllStart);
+            if(interceptAllEnd < 0) interceptAllEnd = StringFind(cmdJson, "}", interceptAllStart);
+            string interceptAllStr = StringSubstr(cmdJson, interceptAllStart, interceptAllEnd - interceptAllStart);
+            StringReplace(interceptAllStr, " ", "");
+            if(StringFind(interceptAllStr, "true") >= 0)
+            {
+               // Save intercept_all flag to Global Variable
+               string interceptAllGvKey = "TJ_InterceptAll_" + IntegerToString(ACCOUNT_ID);
+               GlobalVariableSet(interceptAllGvKey, 1.0);
+               Print("TradingJournalBridge: Intercept all trading enabled via pause command");
+            }
+         }
+      }
+      
+      isPaused = true;
+      SavePauseState();
+      success = true;
+      result = "Trading paused";
+      Print("TradingJournalBridge: Command ", cmdId, " executed - Trading PAUSED");
+   }
+   else if(cmdType == "resume")
+   {
+      // Extract intercept_all flag from params if provided
+      int paramsPos = StringFind(cmdJson, "\"params\":");
+      if(paramsPos >= 0)
+      {
+         int interceptAllPos = StringFind(cmdJson, "\"intercept_all\":", paramsPos);
+         if(interceptAllPos >= 0)
+         {
+            int interceptAllStart = StringFind(cmdJson, ":", interceptAllPos) + 1;
+            int interceptAllEnd = StringFind(cmdJson, ",", interceptAllStart);
+            if(interceptAllEnd < 0) interceptAllEnd = StringFind(cmdJson, "}", interceptAllStart);
+            string interceptAllStr = StringSubstr(cmdJson, interceptAllStart, interceptAllEnd - interceptAllStart);
+            StringReplace(interceptAllStr, " ", "");
+            if(StringFind(interceptAllStr, "true") >= 0)
+            {
+               // Save intercept_all flag to Global Variable
+               string interceptAllGvKey = "TJ_InterceptAll_" + IntegerToString(ACCOUNT_ID);
+               GlobalVariableSet(interceptAllGvKey, 1.0);
+               Print("TradingJournalBridge: Intercept all trading enabled via resume command");
+            }
+         }
+      }
+      
+      isPaused = false;
+      SavePauseState();
+      success = true;
+      result = "Trading resumed";
+      Print("TradingJournalBridge: Command ", cmdId, " executed - Trading RESUMED");
+   }
+   else if(cmdType == "schedule")
+   {
+      int paramsPos = StringFind(cmdJson, "\"params\":");
+      if(paramsPos >= 0)
+      {
+         int daysPos = StringFind(cmdJson, "\"days\":[", paramsPos);
+         if(daysPos >= 0)
+         {
+            int daysStart = daysPos + StringLen("\"days\":[");
+            int daysEnd = StringFind(cmdJson, "]", daysStart);
+            string daysStr = StringSubstr(cmdJson, daysStart, daysEnd - daysStart);
+            
+            for(int i = 0; i < 7; i++) scheduleDays[i] = 0;
+            
+            int dayStart = 0;
+            while(dayStart < StringLen(daysStr))
+            {
+               int commaPos = StringFind(daysStr, ",", dayStart);
+               if(commaPos < 0) commaPos = StringLen(daysStr);
+               
+               string dayStr = StringSubstr(daysStr, dayStart, commaPos - dayStart);
+               StringReplace(dayStr, " ", "");
+               int day = (int)StringToInteger(dayStr);
+               
+               if(day >= 1 && day <= 7)
+               {
+                  scheduleDays[day - 1] = 1;
+               }
+               
+               dayStart = commaPos + 1;
+            }
+         }
+         
+         int startTimePos = StringFind(cmdJson, "\"start_time\":\"", paramsPos);
+         if(startTimePos >= 0)
+         {
+            int startTimeStart = startTimePos + StringLen("\"start_time\":\"");
+            int startTimeEnd = StringFind(cmdJson, "\"", startTimeStart);
+            scheduleStartTime = StringSubstr(cmdJson, startTimeStart, startTimeEnd - startTimeStart);
+         }
+         
+         int endTimePos = StringFind(cmdJson, "\"end_time\":\"", paramsPos);
+         if(endTimePos >= 0)
+         {
+            int endTimeStart = endTimePos + StringLen("\"end_time\":\"");
+            int endTimeEnd = StringFind(cmdJson, "\"", endTimeStart);
+            scheduleEndTime = StringSubstr(cmdJson, endTimeStart, endTimeEnd - endTimeStart);
+         }
+         
+         // Extract intercept_all flag from schedule params if provided
+         bool interceptAll = false;
+         int interceptAllPos = StringFind(cmdJson, "\"intercept_all\":", paramsPos);
+         if(interceptAllPos >= 0)
+         {
+            int interceptAllStart = StringFind(cmdJson, ":", interceptAllPos) + 1;
+            int interceptAllEnd = StringFind(cmdJson, ",", interceptAllStart);
+            if(interceptAllEnd < 0) interceptAllEnd = StringFind(cmdJson, "}", interceptAllStart);
+            string interceptAllStr = StringSubstr(cmdJson, interceptAllStart, interceptAllEnd - interceptAllStart);
+            StringReplace(interceptAllStr, " ", "");
+            if(StringFind(interceptAllStr, "true") >= 0)
+            {
+               interceptAll = true;
+               // Save intercept_all flag to Global Variable
+               string interceptAllGvKey = "TJ_InterceptAll_" + IntegerToString(ACCOUNT_ID);
+               GlobalVariableSet(interceptAllGvKey, 1.0);
+               Print("TradingJournalBridge: Intercept all trading enabled via schedule command");
+            }
+         }
+         
+         // Extract magic buy and sell from schedule params if provided (only if intercept_all is false)
+         int magicBuyPos = StringFind(cmdJson, "\"magic_buy\":", paramsPos);
+         if(!interceptAll && magicBuyPos >= 0)
+         {
+            int magicBuyStart = StringFind(cmdJson, ":", magicBuyPos) + 1;
+            int magicBuyEnd = StringFind(cmdJson, ",", magicBuyStart);
+            if(magicBuyEnd < 0) magicBuyEnd = StringFind(cmdJson, "}", magicBuyStart);
+            string magicBuyStr = StringSubstr(cmdJson, magicBuyStart, magicBuyEnd - magicBuyStart);
+            StringReplace(magicBuyStr, " ", "");
+            int magicBuyNum = (int)StringToInteger(magicBuyStr);
+            if(magicBuyNum > 0)
+            {
+               // Update TARGET_MAGIC_BUY via Global Variable (can't change input parameter at runtime)
+               string magicBuyGvKey = "TJ_TargetMagicBuy_" + IntegerToString(ACCOUNT_ID);
+               GlobalVariableSet(magicBuyGvKey, (double)magicBuyNum);
+               Print("TradingJournalBridge: Target magic BUY updated to ", magicBuyNum);
+            }
+         }
+         
+         int magicSellPos = StringFind(cmdJson, "\"magic_sell\":", paramsPos);
+         if(!interceptAll && magicSellPos >= 0)
+         {
+            int magicSellStart = StringFind(cmdJson, ":", magicSellPos) + 1;
+            int magicSellEnd = StringFind(cmdJson, ",", magicSellStart);
+            if(magicSellEnd < 0) magicSellEnd = StringFind(cmdJson, "}", magicSellStart);
+            string magicSellStr = StringSubstr(cmdJson, magicSellStart, magicSellEnd - magicSellStart);
+            StringReplace(magicSellStr, " ", "");
+            int magicSellNum = (int)StringToInteger(magicSellStr);
+            if(magicSellNum > 0)
+            {
+               // Update TARGET_MAGIC_SELL via Global Variable (can't change input parameter at runtime)
+               string magicSellGvKey = "TJ_TargetMagicSell_" + IntegerToString(ACCOUNT_ID);
+               GlobalVariableSet(magicSellGvKey, (double)magicSellNum);
+               Print("TradingJournalBridge: Target magic SELL updated to ", magicSellNum);
+            }
+         }
+         
+         SaveScheduleState();
+         success = true;
+         result = "Schedule updated";
+         Print("TradingJournalBridge: Command ", cmdId, " executed - Schedule updated");
+      }
+   }
+   
+   if(success)
+   {
+      UpdateCommandStatus(cmdId, "completed", result);
+   }
+   else
+   {
+      UpdateCommandStatus(cmdId, "failed", "Command execution failed");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close all open trades                                             |
+//+------------------------------------------------------------------+
+int CloseAllTrades()
+{
+   // Check if intercept all trading mode is enabled
+   bool interceptAll = INTERCEPT_ALL_TRADING;
+   string interceptAllGvKey = "TJ_InterceptAll_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(interceptAllGvKey))
+   {
+      interceptAll = (GlobalVariableGet(interceptAllGvKey) > 0.5);
+   }
+   
+   if(interceptAll)
+   {
+      return CloseTradesByMagicBuySell(0, 0); // 0,0 means all trades
+   }
+   else
+   {
+      return CloseTradesByMagicBuySell(TARGET_MAGIC_BUY, TARGET_MAGIC_SELL);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close trades by magic buy and sell (0 = all trades)              |
+//+------------------------------------------------------------------+
+int CloseTradesByMagicBuySell(int magicBuy, int magicSell)
+{
+   int closed = 0;
+   
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+      {
+         int orderMagic = OrderMagicNumber();
+         int orderType = OrderType();
+         
+         // Check if this trade should be closed based on magic buy/sell
+         bool shouldClose = false;
+         
+         if(magicBuy == 0 && magicSell == 0)
+         {
+            // No magic specified - close all trades
+            shouldClose = true;
+         }
+         else
+         {
+            // Check if order type matches magic buy or sell
+            if(orderType == OP_BUY && magicBuy > 0 && orderMagic == magicBuy)
+            {
+               shouldClose = true;
+            }
+            else if(orderType == OP_SELL && magicSell > 0 && orderMagic == magicSell)
+            {
+               shouldClose = true;
+            }
+         }
+         
+         if(!shouldClose)
+         {
+            continue; // Skip this trade
+         }
+         
+         if(OrderClose(OrderTicket(), OrderLots(), OrderClosePrice(), 3))
+         {
+            closed++;
+            Print("TradingJournalBridge: Closed trade #", OrderTicket(), " (Type: ", (orderType == OP_BUY ? "BUY" : "SELL"), ", Magic: ", orderMagic, ")");
+         }
+         else
+         {
+            Print("TradingJournalBridge: Failed to close trade #", OrderTicket(), " - Error: ", GetLastError());
+         }
+      }
+   }
+   
+   return closed;
+}
+
+//+------------------------------------------------------------------+
+//| Monitor and control trading (intercept other EAs)                 |
+//+------------------------------------------------------------------+
+void MonitorAndControlTrading()
+{
+   // Get effective target magic buy and sell (from Global Variable if set, otherwise from input)
+   int effectiveMagicBuy = TARGET_MAGIC_BUY;
+   int effectiveMagicSell = TARGET_MAGIC_SELL;
+   string magicBuyGvKey = "TJ_TargetMagicBuy_" + IntegerToString(ACCOUNT_ID);
+   string magicSellGvKey = "TJ_TargetMagicSell_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(magicBuyGvKey))
+   {
+      int gvMagicBuy = (int)GlobalVariableGet(magicBuyGvKey);
+      if(gvMagicBuy > 0)
+      {
+         effectiveMagicBuy = gvMagicBuy;
+      }
+   }
+   if(GlobalVariableCheck(magicSellGvKey))
+   {
+      int gvMagicSell = (int)GlobalVariableGet(magicSellGvKey);
+      if(gvMagicSell > 0)
+      {
+         effectiveMagicSell = gvMagicSell;
+      }
+   }
+   
+   // Check if trading should be paused or outside schedule
+   bool shouldBlockTrading = false;
+   string reason = "";
+   
+   // Check pause flag
+   if(isPaused)
+   {
+      shouldBlockTrading = true;
+      reason = "Trading is PAUSED";
+   }
+   
+   // Check schedule
+   if(!shouldBlockTrading && StringLen(scheduleStartTime) > 0 && StringLen(scheduleEndTime) > 0)
+   {
+      // Get current day of week (0=Sunday, 1=Monday, ..., 6=Saturday in MT4)
+      int currentDay = DayOfWeek();
+      // Convert to our format (0=Monday, 6=Sunday)
+      int dayIndex = (currentDay == 0) ? 6 : (currentDay - 1);
+      
+      // Check if current day is in schedule
+      if(scheduleDays[dayIndex] == 0)
+      {
+         shouldBlockTrading = true;
+         reason = "Outside schedule (day not allowed)";
+      }
+      else
+      {
+         // Check if current time is within schedule
+         datetime currentTime = TimeLocal();
+         int currentHour = TimeHour(currentTime);
+         int currentMinute = TimeMinute(currentTime);
+         
+         // Parse start time
+         int startHour = (int)StringToInteger(StringSubstr(scheduleStartTime, 0, 2));
+         int startMinute = (int)StringToInteger(StringSubstr(scheduleStartTime, 3, 2));
+         
+         // Parse end time
+         int endHour = (int)StringToInteger(StringSubstr(scheduleEndTime, 0, 2));
+         int endMinute = (int)StringToInteger(StringSubstr(scheduleEndTime, 3, 2));
+         
+         // Convert to minutes for comparison
+         int currentMinutes = currentHour * 60 + currentMinute;
+         int startMinutes = startHour * 60 + startMinute;
+         int endMinutes = endHour * 60 + endMinute;
+         
+         // Check if current time is within schedule
+         if(currentMinutes < startMinutes || currentMinutes > endMinutes)
+         {
+            shouldBlockTrading = true;
+            reason = "Outside schedule (time not allowed)";
+         }
+      }
+   }
+   
+   // If trading should be blocked, close any open positions with target magic number
+   if(shouldBlockTrading)
+   {
+      static datetime lastCheckTime = 0;
+      // Only check every 5 seconds to avoid too frequent operations
+      if(TimeCurrent() - lastCheckTime >= 5)
+      {
+         lastCheckTime = TimeCurrent();
+         
+         // Check for new positions opened by target EA
+         for(int i = OrdersTotal() - 1; i >= 0; i--)
+         {
+            if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+            {
+               int orderMagic = OrderMagicNumber();
+               int orderType = OrderType();
+               
+               // Check if this trade should be closed based on magic buy/sell
+               bool shouldClose = false;
+               
+               if(effectiveMagicBuy == 0 && effectiveMagicSell == 0)
+               {
+                  // No magic specified - close all trades
+                  shouldClose = true;
+               }
+               else
+               {
+                  // Check if order type matches magic buy or sell
+                  if(orderType == OP_BUY && effectiveMagicBuy > 0 && orderMagic == effectiveMagicBuy)
+                  {
+                     shouldClose = true;
+                  }
+                  else if(orderType == OP_SELL && effectiveMagicSell > 0 && orderMagic == effectiveMagicSell)
+                  {
+                     shouldClose = true;
+                  }
+               }
+               
+               if(shouldClose)
+               {
+                  if(OrderClose(OrderTicket(), OrderLots(), OrderClosePrice(), 3))
+                  {
+                     Print("TradingJournalBridge: Intercepted and closed trade #", OrderTicket(), " (Type: ", (orderType == OP_BUY ? "BUY" : "SELL"), ", Magic: ", orderMagic, ") - Reason: ", reason);
+                  }
+                  else
+                  {
+                     Print("TradingJournalBridge: Failed to intercept trade #", OrderTicket(), " - Error: ", GetLastError());
+                  }
+               }
+            }
+         }
+      }
+   }
+   
+   // Also set Global Variable to signal other EAs (if they can read it)
+   string gvKey = "TJ_TradingBlocked_" + IntegerToString(ACCOUNT_ID);
+   GlobalVariableSet(gvKey, shouldBlockTrading ? 1.0 : 0.0);
+   
+   // Set magic-specific flags
+   if(effectiveMagicBuy > 0)
+   {
+      string magicBuyBlockGvKey = "TJ_BlockMagicBuy_" + IntegerToString(ACCOUNT_ID) + "_" + IntegerToString(effectiveMagicBuy);
+      GlobalVariableSet(magicBuyBlockGvKey, shouldBlockTrading ? 1.0 : 0.0);
+   }
+   if(effectiveMagicSell > 0)
+   {
+      string magicSellBlockGvKey = "TJ_BlockMagicSell_" + IntegerToString(ACCOUNT_ID) + "_" + IntegerToString(effectiveMagicSell);
+      GlobalVariableSet(magicSellBlockGvKey, shouldBlockTrading ? 1.0 : 0.0);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Save pause state to Global Variables                              |
+//+------------------------------------------------------------------+
+void SavePauseState()
+{
+   string gvKey = "TJ_Paused_" + IntegerToString(ACCOUNT_ID);
+   GlobalVariableSet(gvKey, isPaused ? 1.0 : 0.0);
+}
+
+//+------------------------------------------------------------------+
+//| Load pause state from Global Variables                           |
+//+------------------------------------------------------------------+
+void LoadPauseState()
+{
+   string gvKey = "TJ_Paused_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(gvKey))
+   {
+      isPaused = (GlobalVariableGet(gvKey) > 0.5);
+   }
+   else
+   {
+      isPaused = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Save schedule state to Global Variables                           |
+//+------------------------------------------------------------------+
+void SaveScheduleState()
+{
+   string gvKey = "TJ_ScheduleDays_" + IntegerToString(ACCOUNT_ID);
+   string daysStr = "";
+   for(int i = 0; i < 7; i++)
+   {
+      if(i > 0) daysStr += ",";
+      daysStr += IntegerToString(scheduleDays[i]);
+   }
+   GlobalVariableSet(gvKey, StringToDouble(daysStr));
+}
+
+//+------------------------------------------------------------------+
+//| Load schedule state from Global Variables                         |
+//+------------------------------------------------------------------+
+void LoadScheduleState()
+{
+   string gvKey = "TJ_ScheduleDays_" + IntegerToString(ACCOUNT_ID);
+   if(GlobalVariableCheck(gvKey))
+   {
+      double daysValue = GlobalVariableGet(gvKey);
+      string daysStr = DoubleToString(daysValue, 0);
+      int dayStart = 0;
+      int dayIndex = 0;
+      while(dayStart < StringLen(daysStr) && dayIndex < 7)
+      {
+         int commaPos = StringFind(daysStr, ",", dayStart);
+         if(commaPos < 0) commaPos = StringLen(daysStr);
+         
+         string dayStr = StringSubstr(daysStr, dayStart, commaPos - dayStart);
+         scheduleDays[dayIndex] = (int)StringToInteger(dayStr);
+         dayIndex++;
+         dayStart = commaPos + 1;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update command status on backend                                 |
+//+------------------------------------------------------------------+
+void UpdateCommandStatus(int cmdId, string status, string result)
+{
+   string baseUrl = API_URL;
+   int incomingPos = StringFind(baseUrl, "/incoming");
+   if(incomingPos < 0) return;
+   
+   string url = StringSubstr(baseUrl, 0, incomingPos) + "/ea-commands/" + IntegerToString(cmdId) + "/status";
+   
+   string json = "{";
+   json += "\"status\":\"" + status + "\"";
+   if(StringLen(result) > 0)
+   {
+      json += ",\"result\":\"" + EscapeJsonString(result) + "\"";
+   }
+   json += "}";
+   
+   string headers = "";
+   headers += "Content-Type: application/json\r\n";
+   headers += "Accept: application/json\r\n";
+   if(StringFind(API_URL, "ngrok") >= 0)
+   {
+      headers += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n";
+      headers += "ngrok-skip-browser-warning: true\r\n";
+   }
+   headers += "X-API-Token: " + API_TOKEN + "\r\n";
+   headers += "X-Account-ID: " + IntegerToString(ACCOUNT_ID) + "\r\n";
+   
+   char post[];
+   char resultData[];
+   string resultHeaders;
+   
+   StringToCharArray(json, post, 0, StringLen(json));
+   ArrayResize(post, StringLen(json));
+   
+   int response = WebRequest("PUT", url, headers, 5000, post, resultData, resultHeaders);
+   
+   if(response == 200)
+   {
+      Print("TradingJournalBridge: Command ", cmdId, " status updated to ", status);
+   }
+   else
+   {
+      Print("TradingJournalBridge: Failed to update command ", cmdId, " status - HTTP ", response);
+   }
 }
 //+------------------------------------------------------------------+
 
