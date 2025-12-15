@@ -54,6 +54,8 @@ class EABridgeController extends Controller
             'trades.*.take_profit' => 'nullable|numeric',
             'trades.*.comment' => 'nullable|string',
             'trades.*.magic_number' => 'nullable|integer',
+            'market_regime' => 'nullable|array',
+            'market_regime.regime' => 'nullable|string|in:SIDEWAYS,BULLISH,BEARISH,UNKNOWN',
         ]);
 
         // Create sync log
@@ -259,12 +261,24 @@ class EABridgeController extends Controller
                 }
             }
             
-            // Update account status
-            $account->update([
+            // Update account status and market regime
+            $updateData = [
                 'status' => 'active',
                 'last_sync_at' => now(),
                 'error_message' => null,
-            ]);
+            ];
+            
+            // Store market regime in meta field
+            if (isset($validated['market_regime']['regime'])) {
+                $meta = $account->meta ?? [];
+                $meta['market_regime'] = [
+                    'regime' => $validated['market_regime']['regime'],
+                    'updated_at' => now()->toIso8601String(),
+                ];
+                $updateData['meta'] = $meta;
+            }
+            
+            $account->update($updateData);
 
             DB::commit();
 

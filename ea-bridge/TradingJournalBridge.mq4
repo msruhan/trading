@@ -888,7 +888,15 @@ string BuildPayload()
       Print("TradingJournalBridge: History sync is DISABLED. Enable SYNC_HISTORY to sync closed trades.");
    }
    
-   json += "]}";
+   json += "],";
+   
+   // Market Regime Analysis (EMA200 + ADX(14) for XAUUSD H1)
+   string marketRegime = CalculateMarketRegime();
+   json += "\"market_regime\":{";
+   json += "\"regime\":\"" + marketRegime + "\"";
+   json += "}";
+   
+   json += "}";
    
    // Count total trades in JSON for logging
    int totalTradesInPayload = openTradesCount + historyCount;
@@ -897,6 +905,7 @@ string BuildPayload()
    lastHistoryCount = historyCount;
    
    Print("TradingJournalBridge: Summary - Open: ", openTradesCount, ", History: ", historyCount, ", Total: ", totalTradesInPayload);
+   Print("TradingJournalBridge: Market Regime: ", marketRegime);
    
    return json;
 }
@@ -1858,6 +1867,122 @@ void UpdateCommandStatus(int cmdId, string status, string result)
    {
       Print("TradingJournalBridge: Failed to update command ", cmdId, " status - HTTP ", response);
    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate EMA200 for XAUUSD H1                                    |
+//+------------------------------------------------------------------+
+double CalculateEMA200()
+{
+   string symbol = "XAUUSD";
+   int timeframe = PERIOD_H1;
+   int period = 200;
+   
+   // Use iMA (Moving Average) indicator with EMA mode
+   // Shift = 1 means use closed candle (no repaint)
+   double ema200 = iMA(symbol, timeframe, period, 0, MODE_EMA, PRICE_CLOSE, 1);
+   
+   if(ema200 == 0 || ema200 == EMPTY_VALUE)
+   {
+      Print("TradingJournalBridge: EMA200 calculation failed or insufficient data");
+      return 0;
+   }
+   
+   return ema200;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate ADX(14) for XAUUSD H1                                   |
+//+------------------------------------------------------------------+
+double CalculateADX14()
+{
+   string symbol = "XAUUSD";
+   int timeframe = PERIOD_H1;
+   int period = 14;
+   
+   // Use iADX (Average Directional Movement Index) indicator
+   // MODE_MAIN returns the ADX line value
+   // Shift = 1 means use closed candle (no repaint)
+   double adx = iADX(symbol, timeframe, period, PRICE_CLOSE, MODE_MAIN, 1);
+   
+   if(adx == 0 || adx == EMPTY_VALUE)
+   {
+      Print("TradingJournalBridge: ADX(14) calculation failed or insufficient data");
+      return 0;
+   }
+   
+   return adx;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Market Regime based on EMA200 and ADX(14)              |
+//| Returns: "SIDEWAYS", "BULLISH", or "BEARISH"                     |
+//+------------------------------------------------------------------+
+string CalculateMarketRegime()
+{
+   string symbol = "XAUUSD";
+   int timeframe = PERIOD_H1;
+   
+   // Calculate ADX(14) - use closed candle (shift = 1)
+   double adx = CalculateADX14();
+   
+   if(adx == 0 || adx == EMPTY_VALUE)
+   {
+      Print("TradingJournalBridge: Cannot calculate market regime - ADX data unavailable");
+      return "UNKNOWN";
+   }
+   
+   // ADX < 20 → SIDEWAYS
+   if(adx < 20.0)
+   {
+      Print("TradingJournalBridge: Market Regime = SIDEWAYS (ADX: ", DoubleToString(adx, 2), " < 20)");
+      return "SIDEWAYS";
+   }
+   
+   // ADX >= 25 → Check EMA200 vs Close price
+   if(adx >= 25.0)
+   {
+      // Calculate EMA200 - use closed candle (shift = 1)
+      double ema200 = CalculateEMA200();
+      
+      if(ema200 == 0 || ema200 == EMPTY_VALUE)
+      {
+         Print("TradingJournalBridge: Cannot calculate market regime - EMA200 data unavailable");
+         return "UNKNOWN";
+      }
+      
+      // Get current close price (closed candle, shift = 1)
+      double closePrice = iClose(symbol, timeframe, 1);
+      
+      if(closePrice == 0 || closePrice == EMPTY_VALUE)
+      {
+         Print("TradingJournalBridge: Cannot calculate market regime - Close price unavailable");
+         return "UNKNOWN";
+      }
+      
+      // ADX >= 25 AND close > EMA200 → BULLISH
+      if(closePrice > ema200)
+      {
+         Print("TradingJournalBridge: Market Regime = BULLISH (ADX: ", DoubleToString(adx, 2), " >= 25, Close: ", DoubleToString(closePrice, 2), " > EMA200: ", DoubleToString(ema200, 2), ")");
+         return "BULLISH";
+      }
+      // ADX >= 25 AND close < EMA200 → BEARISH
+      else if(closePrice < ema200)
+      {
+         Print("TradingJournalBridge: Market Regime = BEARISH (ADX: ", DoubleToString(adx, 2), " >= 25, Close: ", DoubleToString(closePrice, 2), " < EMA200: ", DoubleToString(ema200, 2), ")");
+         return "BEARISH";
+      }
+      else
+      {
+         // Close == EMA200 (rare case) → SIDEWAYS
+         Print("TradingJournalBridge: Market Regime = SIDEWAYS (ADX: ", DoubleToString(adx, 2), " >= 25, Close: ", DoubleToString(closePrice, 2), " == EMA200: ", DoubleToString(ema200, 2), ")");
+         return "SIDEWAYS";
+      }
+   }
+   
+   // ADX between 20 and 25 → SIDEWAYS (weak trend)
+   Print("TradingJournalBridge: Market Regime = SIDEWAYS (ADX: ", DoubleToString(adx, 2), " between 20-25)");
+   return "SIDEWAYS";
 }
 //+------------------------------------------------------------------+
 
