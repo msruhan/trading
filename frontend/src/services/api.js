@@ -132,5 +132,20 @@ export const chartAnalysisAPI = {
   delete: (id) => api.delete(`/chart-analyses/${id}`),
 }
 
+// MSI (Market Stability Index) API
+export const msiAPI = {
+  getLive: () => api.get('/msi/live'),
+}
+
+// Insights API
+export const insightsAPI = {
+  getAll: (params) => api.get('/insights', { params }),
+}
+
+// Today Analysis API
+export const todayAnalysisAPI = {
+  getAnalysis: (params) => api.get('/today-analysis', { params }),
+}
+
 export default api
 

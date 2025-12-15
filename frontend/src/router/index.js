@@ -17,6 +17,7 @@ const Journal = () => import('@/pages/Journal.vue')
 const Portfolio = () => import('@/pages/Portfolio.vue')
 const News = () => import('@/pages/News.vue')
 const Chart = () => import('@/pages/Chart.vue')
+const Insights = () => import('@/pages/Insights.vue')
 
 const routes = [
   {
@@ -101,6 +102,12 @@ const routes = [
     path: '/chart',
     name: 'chart',
     component: Chart,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/insights',
+    name: 'insights',
+    component: Insights,
     meta: { requiresAuth: true },
   },
   {
