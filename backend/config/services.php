@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    'groq' => [
+        'api_key' => env('GROQ_API_KEY', ''),
+        'enabled' => env('GROQ_ENABLED', false),
+        'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+        'timeout' => env('GROQ_TIMEOUT', 30),
+        'cache_ttl' => env('GROQ_CACHE_TTL', 3600), // 1 hour
+        'min_confidence' => env('GROQ_MIN_CONFIDENCE', 60), // Minimum confidence to use AI (0-100)
+    ],
+
 ];

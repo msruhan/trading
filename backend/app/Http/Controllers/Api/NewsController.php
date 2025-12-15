@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\NewsItem;
 use App\Services\ForexFactoryScraper;
 use App\Services\TechnicalAnalysisService;
+use App\Services\TodayAnalysisService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,11 +15,16 @@ class NewsController extends Controller
 {
     protected ForexFactoryScraper $scraper;
     protected TechnicalAnalysisService $technicalService;
+    protected TodayAnalysisService $todayAnalysisService;
 
-    public function __construct(ForexFactoryScraper $scraper, TechnicalAnalysisService $technicalService)
-    {
+    public function __construct(
+        ForexFactoryScraper $scraper, 
+        TechnicalAnalysisService $technicalService,
+        TodayAnalysisService $todayAnalysisService
+    ) {
         $this->scraper = $scraper;
         $this->technicalService = $technicalService;
+        $this->todayAnalysisService = $todayAnalysisService;
     }
 
     /**
@@ -734,6 +740,41 @@ class NewsController extends Controller
             $historicalDangerWindows,
             'historical_marking'
         );
+        
+        // Enhance with AI data from TodayAnalysisService
+        try {
+            $todayAnalysis = $this->todayAnalysisService->getTodayAnalysis($user, $date);
+            
+            // Merge AI data for Prediction 1
+            if (isset($todayAnalysis['predictions']['prediction_1'])) {
+                $pred1 = $todayAnalysis['predictions']['prediction_1'];
+                
+                if (isset($pred1['ai_enhanced']) && $pred1['ai_enhanced'] === true) {
+                    $impactDayPrediction = array_merge($impactDayPrediction, [
+                        'ai_enhanced' => true,
+                        'ai_confidence' => $pred1['ai_confidence'] ?? null,
+                        'ai_reasoning' => $pred1['ai_reasoning'] ?? null,
+                        'ai_recommendation' => $pred1['ai_recommendation'] ?? null,
+                    ]);
+                }
+            }
+            
+            // Merge AI data for Prediction 2
+            if (isset($todayAnalysis['predictions']['prediction_2'])) {
+                $pred2 = $todayAnalysis['predictions']['prediction_2'];
+                
+                if (isset($pred2['ai_enhanced']) && $pred2['ai_enhanced'] === true) {
+                    $historicalDayPrediction = array_merge($historicalDayPrediction, [
+                        'ai_enhanced' => true,
+                        'ai_confidence' => $pred2['ai_confidence'] ?? null,
+                        'ai_reasoning' => $pred2['ai_reasoning'] ?? null,
+                        'ai_recommendation' => $pred2['ai_recommendation'] ?? null,
+                    ]);
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Failed to enhance predictions with AI', ['error' => $e->getMessage()]);
+        }
         
         return response()->json([
             'date' => $date,

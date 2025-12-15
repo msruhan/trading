@@ -17,6 +17,7 @@ import {
   BookOpenIcon,
   NewspaperIcon,
   XMarkIcon,
+  LightBulbIcon,
 } from '@heroicons/vue/24/outline'
 
 const props = defineProps({
@@ -37,7 +38,8 @@ const navigation = [
   { name: 'Chart', href: '/chart', icon: ChartBarSquareIcon },
   { name: 'Portfolio', href: '/portfolio', icon: CurrencyDollarIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarIcon },
-  { name: 'News', href: '/news', icon: NewspaperIcon },
+  { name: 'EA Monitoring', href: '/news', icon: NewspaperIcon },
+  { name: 'Insights', href: '/insights', icon: LightBulbIcon },
   { name: 'Journal', href: '/journal', icon: BookOpenIcon },
   { name: 'Reports', href: '/reports', icon: DocumentTextIcon },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },

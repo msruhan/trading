@@ -133,6 +133,7 @@ Route::prefix('v1')->group(function () {
         Route::prefix('today-analysis')->group(function () {
             Route::get('/', [TodayAnalysisController::class, 'index']);
         });
+
     });
 });
 

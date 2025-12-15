@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold">Economic Calendar</h1>
+        <h1 class="text-2xl font-bold">EA Monitoring</h1>
         <p class="text-dark-400 mt-1">ForexFactory news with EA safety tracking</p>
       </div>
       
@@ -174,6 +174,426 @@
       </div>
     </div>
 
+
+    <!-- News Table -->
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead class="bg-dark-800/50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider w-12">
+                <input 
+                  type="checkbox" 
+                  @change="toggleSelectAll"
+                  :checked="selectedNews.length === filteredNews.length && filteredNews.length > 0"
+                  class="rounded border-dark-600 bg-dark-800 text-primary-500 focus:ring-primary-500"
+                />
+              </th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Date</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Time</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Currency</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Impact</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Event</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Actual</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Forecast</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Previous</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">EA Status</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-dark-800">
+            <tr v-if="loading">
+              <td colspan="10" class="px-4 py-12 text-center">
+                <div class="flex items-center justify-center gap-3">
+                  <div class="spinner"></div>
+                  <span class="text-dark-400">Loading news...</span>
+                </div>
+              </td>
+            </tr>
+            <tr v-else-if="filteredNews.length === 0">
+              <td colspan="10" class="px-4 py-12 text-center text-dark-400">
+                <div class="flex flex-col items-center gap-2">
+                  <svg class="w-12 h-12 text-dark-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/>
+                  </svg>
+                  <span>No news found for this date</span>
+                  <button @click="syncNews" class="mt-2 text-primary-400 hover:text-primary-300">
+                    Click to sync news
+                  </button>
+                </div>
+              </td>
+            </tr>
+            <tr 
+              v-for="news in filteredNews" 
+              :key="news.id"
+              :class="[
+                'hover:bg-dark-800/30 transition-colors',
+                news.should_disable_ea && 'bg-red-500/5'
+              ]"
+            >
+              <td class="px-4 py-3">
+                <input 
+                  type="checkbox" 
+                  :value="news.id"
+                  v-model="selectedNews"
+                  class="rounded border-dark-600 bg-dark-800 text-primary-500 focus:ring-primary-500"
+                />
+              </td>
+              <td class="px-4 py-3 font-mono text-xs text-dark-300">
+                {{ formatDate(news) }}
+              </td>
+              <td class="px-4 py-3 font-mono text-sm">
+                {{ news.formatted_time || 'All Day' }}
+              </td>
+              <td class="px-4 py-3">
+                <span :class="getCurrencyClass(news.currency)" class="px-2 py-1 rounded text-sm font-semibold">
+                  {{ news.currency }}
+                </span>
+              </td>
+              <td class="px-4 py-3">
+                <span :class="getImpactClass(news.impact)" class="px-2 py-1 rounded text-xs font-medium flex items-center gap-1 w-fit">
+                  <span :class="getImpactDotClass(news.impact)" class="w-2 h-2 rounded-full"></span>
+                  {{ news.impact }}
+                </span>
+              </td>
+              <td class="px-4 py-3">
+                <div class="font-medium">{{ news.title }}</div>
+                <div v-if="news.user_notes" class="text-xs text-dark-400 mt-1">
+                  📝 {{ news.user_notes }}
+                </div>
+              </td>
+              <td class="px-4 py-3 font-mono text-sm" :class="getValueClass(news.actual, news.forecast)">
+                {{ news.actual || '-' }}
+              </td>
+              <td class="px-4 py-3 font-mono text-sm text-dark-400">
+                {{ news.forecast || '-' }}
+              </td>
+              <td class="px-4 py-3 font-mono text-sm text-dark-400">
+                {{ news.previous || '-' }}
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-2">
+                  <button 
+                    @click="cycleEaStatus(news)"
+                    :class="[
+                      'px-2 py-1 rounded text-xs font-medium border transition-colors',
+                      news.ea_status_color
+                    ]"
+                    :title="news.ea_status ? `EA Status: ${news.ea_status.toUpperCase()}` : 'Klik untuk menandai EA Status'"
+                  >
+                    {{ news.ea_status ? news.ea_status.toUpperCase() : '—' }}
+                  </button>
+                  <div v-if="news.should_disable_ea" class="text-xs text-red-400" title="EA will be disabled">
+                    ⚠️
+                  </div>
+                </div>
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-2">
+                  <button 
+                    @click="openEditModal(news)"
+                    class="p-1.5 hover:bg-dark-700 rounded-lg transition-colors text-dark-400 hover:text-white"
+                    title="Edit EA Settings"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                    </svg>
+                  </button>
+                  <button 
+                    @click="toggleDisableEa(news)"
+                    :class="[
+                      'p-1.5 rounded-lg transition-colors',
+                      news.should_disable_ea ? 'bg-red-500/20 text-red-400' : 'hover:bg-dark-700 text-dark-400 hover:text-white'
+                    ]"
+                    :title="news.should_disable_ea ? 'EA Disabled' : 'Click to disable EA'"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                    </svg>
+                  </button>
+                  <button 
+                    @click="deleteNews(news)"
+                    class="p-1.5 hover:bg-red-600/20 rounded-lg transition-colors text-red-400"
+                    title="Delete event"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 7h12M10 11v6m4-6v6M9 7l1-2h4l1 2M5 7h14l-1 12H6L5 7z"/>
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+
+    <!-- 🔥 High-Impact Events Reference Card -->
+    <div class="card p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">📚</span>
+          <div>
+            <h2 class="text-lg font-semibold">Referensi High-Impact News</h2>
+            <p class="text-sm text-dark-400">Catatan: Impact bisa bervariasi, gunakan sebagai pertimbangan saja</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Notable Events Today -->
+      <div v-if="notableEvents.length > 0" class="mb-6">
+        <h3 class="text-sm font-semibold text-orange-400 mb-3">🔥 Notable Events Hari Ini ({{ selectedDate }})</h3>
+        <div class="space-y-3">
+          <div 
+            v-for="event in notableEvents" 
+            :key="event.id"
+            class="p-4 bg-dark-800/50 border border-dark-700 rounded-xl"
+          >
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-1 text-xs font-bold bg-orange-500/20 text-orange-400 rounded">
+                  {{ event.type }}
+                </span>
+                <span class="font-medium">{{ event.title }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-dark-400">{{ event.time }}</span>
+                <span :class="getCurrencyClass(event.currency)" class="px-2 py-0.5 rounded text-xs">
+                  {{ event.currency }}
+                </span>
+                <span :class="getImpactClass(event.actual_impact)" class="px-2 py-0.5 rounded text-xs">
+                  {{ event.actual_impact }}
+                </span>
+              </div>
+            </div>
+            
+            <p class="text-sm text-dark-400 mb-2">{{ event.note }}</p>
+            
+            <!-- Historical Stats if available -->
+            <div v-if="event.historical_stats" class="flex items-center gap-4 text-xs">
+              <span class="text-dark-500">Berdasarkan {{ event.historical_stats.total }} history:</span>
+              <span class="text-red-400">Danger {{ event.historical_stats.danger_pct }}%</span>
+              <span class="text-yellow-400">Caution {{ event.historical_stats.caution_pct }}%</span>
+              <span class="text-green-400">Safe {{ event.historical_stats.safe_pct }}%</span>
+            </div>
+            
+            <!-- Current EA Status -->
+            <div v-if="event.ea_status" class="mt-2">
+              <span class="text-xs text-dark-500">Status saat ini: </span>
+              <span :class="[
+                'px-2 py-0.5 rounded text-xs font-medium',
+                event.ea_status === 'danger' ? 'bg-red-500/30 text-red-300' :
+                event.ea_status === 'caution' ? 'bg-yellow-500/30 text-yellow-300' :
+                'bg-green-500/30 text-green-300'
+              ]">{{ event.ea_status?.toUpperCase() }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Reference Guide -->
+      <details class="group">
+        <summary class="cursor-pointer flex items-center gap-2 text-sm font-semibold text-dark-300 hover:text-white">
+          <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+          📖 Panduan High-Impact Events
+        </summary>
+        
+        <div class="mt-4 grid md:grid-cols-2 gap-4">
+          <div v-for="(info, index) in referenceInfo" :key="index" class="p-4 bg-dark-800/30 rounded-xl border border-dark-700/50">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="px-2 py-1 text-xs font-bold bg-orange-500/20 text-orange-400 rounded">{{ info.type }}</span>
+              <span class="font-medium text-sm">{{ info.name }}</span>
+            </div>
+            <p class="text-xs text-dark-400 mb-2">{{ info.description }}</p>
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-dark-500">Typical Impact: 
+                <span :class="info.typical_impact === 'High' ? 'text-red-400' : info.typical_impact === 'Medium' ? 'text-yellow-400' : 'text-dark-300'">
+                  {{ info.typical_impact }}
+                </span>
+              </span>
+            </div>
+            <p class="text-xs text-blue-400 mt-1">💡 {{ info.advice }}</p>
+          </div>
+        </div>
+      </details>
+      
+      <!-- Disclaimer -->
+      <div class="mt-4 p-3 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
+        <p class="text-xs text-yellow-400/80">
+          ⚠️ <strong>Catatan Penting:</strong> Impact news bisa bervariasi tergantung rilis (contoh: Final GDP biasanya low impact, Advance GDP biasanya high impact). 
+          Selalu cek actual impact dari ForexFactory dan sesuaikan dengan pengalaman trading Anda.
+        </p>
+      </div>
+    </div>
+
+
+    <!-- 📈 Learning Statistics (Collapsible) -->
+    <div class="card p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">📈</span>
+          <div>
+            <h2 class="text-lg font-semibold">Learning Statistics</h2>
+            <p class="text-sm text-dark-400">Pola historis dari news yang sudah ditandai</p>
+          </div>
+        </div>
+        <button 
+          @click="fetchPredictionStats"
+          :disabled="loadingStats"
+          class="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg hover:bg-blue-600/30 transition-colors disabled:opacity-50"
+        >
+          <svg :class="['w-4 h-4', loadingStats && 'animate-spin']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+          {{ loadingStats ? 'Loading...' : 'Load Stats' }}
+        </button>
+      </div>
+
+      <details class="group">
+        <summary class="cursor-pointer text-sm font-semibold text-dark-300 hover:text-white mb-4 flex items-center gap-2">
+          <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+          Tampilkan Detail Statistik
+        </summary>
+
+        <div class="mt-4">
+          <!-- Loading State -->
+          <div v-if="loadingStats" class="flex items-center justify-center py-8">
+            <div class="spinner mr-2"></div>
+            <span class="text-dark-400">Memuat statistik...</span>
+          </div>
+
+          <!-- Error State -->
+          <div v-else-if="predictionStatsError" class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl">
+            <p class="text-sm text-red-400">Error: {{ predictionStatsError }}</p>
+            <button @click="fetchPredictionStats" class="mt-2 text-xs text-red-300 hover:text-red-200">
+              Coba lagi
+            </button>
+          </div>
+
+          <!-- Stats Content -->
+          <div v-else-if="predictionStats">
+            <!-- Summary Stats -->
+            <div class="grid grid-cols-3 gap-4 mb-6">
+              <div class="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
+                <div class="text-xs text-dark-400 mb-1">Total Marked</div>
+                <div class="text-2xl font-bold text-white">{{ predictionStats.total_marked || 0 }}</div>
+                <div class="text-xs text-dark-500 mt-1">dalam {{ predictionStats.period_days }} hari</div>
+              </div>
+              <div class="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
+                <div class="text-xs text-dark-400 mb-1">Unique Events</div>
+                <div class="text-2xl font-bold text-blue-400">{{ predictionStats.unique_events || 0 }}</div>
+                <div class="text-xs text-dark-500 mt-1">event berbeda</div>
+              </div>
+              <div class="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
+                <div class="text-xs text-dark-400 mb-1">Learning Data</div>
+                <div class="text-2xl font-bold text-purple-400">{{ predictionStats.events?.length || 0 }}</div>
+                <div class="text-xs text-dark-500 mt-1">dengan statistik</div>
+              </div>
+            </div>
+
+            <!-- High Impact Events Stats -->
+            <div v-if="predictionStats?.high_impact_stats && Object.keys(predictionStats.high_impact_stats).length > 0" class="mb-6">
+              <h3 class="text-sm font-semibold text-orange-400 mb-3">🔥 Analisis High-Impact Events</h3>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div 
+                  v-for="(stat, type) in predictionStats.high_impact_stats" 
+                  :key="type"
+                  class="p-3 bg-dark-800/50 rounded-lg border border-dark-700"
+                >
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="font-medium text-sm">{{ type }}</span>
+                    <span class="text-xs text-dark-400">{{ stat.total }} events</span>
+                  </div>
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-red-400">Danger</span>
+                      <span>{{ stat.danger_pct }}%</span>
+                    </div>
+                    <div class="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
+                      <div class="h-full bg-red-500 rounded-full" :style="{ width: stat.danger_pct + '%' }"></div>
+                    </div>
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-yellow-400">Caution</span>
+                      <span>{{ stat.caution_pct }}%</span>
+                    </div>
+                    <div class="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
+                      <div class="h-full bg-yellow-500 rounded-full" :style="{ width: stat.caution_pct + '%' }"></div>
+                    </div>
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-green-400">Safe</span>
+                      <span>{{ stat.safe_pct }}%</span>
+                    </div>
+                    <div class="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
+                      <div class="h-full bg-green-500 rounded-full" :style="{ width: stat.safe_pct + '%' }"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Learning Summary -->
+            <div v-if="predictionStats?.learning_summary" class="grid md:grid-cols-2 gap-4">
+              <div class="p-4 bg-red-500/5 border border-red-500/20 rounded-xl">
+                <h4 class="text-sm font-semibold text-red-400 mb-2">🔴 News Paling Berbahaya</h4>
+                <div v-if="predictionStats.learning_summary.most_dangerous?.length > 0" class="space-y-2">
+                  <div 
+                    v-for="(event, index) in predictionStats.learning_summary.most_dangerous.slice(0, 5)" 
+                    :key="index"
+                    class="flex items-center justify-between text-sm"
+                  >
+                    <div class="flex items-center gap-2">
+                      <span :class="getCurrencyClass(event.currency)" class="px-1.5 py-0.5 rounded text-xs">
+                        {{ event.currency }}
+                      </span>
+                      <span class="text-dark-300 truncate max-w-48">{{ event.title }}</span>
+                    </div>
+                    <span class="text-red-400 font-mono">{{ event.danger_pct }}%</span>
+                  </div>
+                </div>
+                <p v-else class="text-sm text-dark-500">Belum ada data.</p>
+              </div>
+              <div class="p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
+                <h4 class="text-sm font-semibold text-green-400 mb-2">🟢 News Paling Aman</h4>
+                <div v-if="predictionStats.learning_summary.most_safe?.length > 0" class="space-y-2">
+                  <div 
+                    v-for="(event, index) in predictionStats.learning_summary.most_safe.slice(0, 5)" 
+                    :key="index"
+                    class="flex items-center justify-between text-sm"
+                  >
+                    <div class="flex items-center gap-2">
+                      <span :class="getCurrencyClass(event.currency)" class="px-1.5 py-0.5 rounded text-xs">
+                        {{ event.currency }}
+                      </span>
+                      <span class="text-dark-300 truncate max-w-48">{{ event.title }}</span>
+                    </div>
+                    <span class="text-green-400 font-mono">{{ event.safe_pct }}%</span>
+                  </div>
+                </div>
+                <p v-else class="text-sm text-dark-500">Belum ada data.</p>
+              </div>
+            </div>
+
+            <!-- Advice -->
+            <div v-if="predictionStats?.learning_summary?.advice" class="mt-4 p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl">
+              <p class="text-sm text-blue-400">💡 {{ predictionStats.learning_summary.advice }}</p>
+            </div>
+          </div>
+
+          <!-- Empty State -->
+          <div v-else-if="!loadingStats" class="text-center py-8 text-dark-400">
+            <span class="text-4xl mb-2 block">📊</span>
+            <p class="text-sm">Klik "Load Stats" untuk melihat statistik pembelajaran.</p>
+            <p class="text-xs mt-1 text-dark-500">Tandai lebih banyak news untuk meningkatkan akurasi prediksi.</p>
+          </div>
+        </div>
+      </details>
+    </div>
+
     <!-- 🔮 PREDICTION 1: ForexFactory Impact Based -->
     <div class="card p-6">
       <div class="flex items-center justify-between mb-4">
@@ -212,8 +632,65 @@
             {{ forexfactoryDayPrediction.status === 'danger' ? '🔴 DANGER' : forexfactoryDayPrediction.status === 'caution' ? '🟡 CAUTION' : '🟢 SAFE' }}
           </span>
           <span class="text-sm text-dark-400">{{ selectedDate }}</span>
+          <!-- AI Enhanced Badge -->
+          <span v-if="forexfactoryDayPrediction.ai_enhanced" class="px-2 py-1 bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-medium flex items-center gap-1">
+            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+            </svg>
+            AI Enhanced
+          </span>
         </div>
         <p class="text-dark-300 mb-3">{{ forexfactoryDayPrediction.message }}</p>
+        
+        <!-- AI Information -->
+        <div v-if="forexfactoryDayPrediction.ai_enhanced" class="mb-4 p-4 bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/30 rounded-xl">
+          <div class="flex items-center gap-2 mb-3">
+            <svg class="w-5 h-5 text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+            </svg>
+            <h4 class="text-sm font-semibold text-purple-300">AI Analysis (Groq)</h4>
+          </div>
+          
+          <!-- AI Confidence -->
+          <div v-if="forexfactoryDayPrediction.ai_confidence" class="mb-3">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs text-dark-400">AI Confidence</span>
+              <span class="text-sm font-medium text-purple-400">{{ forexfactoryDayPrediction.ai_confidence }}%</span>
+            </div>
+            <div class="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
+              <div 
+                class="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full transition-all"
+                :style="{ width: forexfactoryDayPrediction.ai_confidence + '%' }"
+              ></div>
+            </div>
+          </div>
+          
+          <!-- AI Recommendation -->
+          <div v-if="forexfactoryDayPrediction.ai_recommendation" class="mb-3 p-3 bg-dark-800/50 rounded-lg border border-purple-500/20">
+            <div class="flex items-start gap-2">
+              <svg class="w-4 h-4 text-purple-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+              </svg>
+              <div class="flex-1">
+                <p class="text-xs font-medium text-purple-300 mb-1">AI Recommendation</p>
+                <p class="text-sm text-dark-200">{{ forexfactoryDayPrediction.ai_recommendation }}</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- AI Reasoning (Collapsible) -->
+          <details v-if="forexfactoryDayPrediction.ai_reasoning" class="group">
+            <summary class="cursor-pointer text-xs text-purple-400 hover:text-purple-300 flex items-center gap-2 mb-2">
+              <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+              </svg>
+              Tampilkan AI Reasoning
+            </summary>
+            <div class="mt-2 p-3 bg-dark-900/50 rounded-lg border border-purple-500/10">
+              <p class="text-sm text-dark-300 whitespace-pre-line">{{ forexfactoryDayPrediction.ai_reasoning }}</p>
+            </div>
+          </details>
+        </div>
         
         <!-- Stats Row -->
         <div class="flex flex-wrap gap-3 text-sm mb-4">
@@ -657,808 +1134,336 @@
       </div>
     </div>
 
-    <!-- 📊 PREDICTION 3: Technical Analysis Based -->
-    <div class="card p-6">
+
+      <!-- 🌍 PREDICTION 4: Market Stability Index (MSI) -->
+      <div class="card p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <span class="text-2xl">📊</span>
+          <span class="text-2xl">🌍</span>
           <div>
-            <h2 class="text-lg font-semibold">Prediksi 3: Berdasarkan Analisis Teknikal</h2>
-            <p class="text-sm text-dark-400">7 modul analisis teknikal multi-timeframe</p>
+            <h2 class="text-lg font-semibold">Prediksi 3: Market Stability Index</h2>
+            <p class="text-sm text-dark-400">Stabilitas market global untuk EA Grid</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
           <button 
-            @click="fetchTechnicalAnalysis()"
-            :disabled="loadingTechnical"
-            class="flex items-center gap-2 px-3 py-1.5 text-sm bg-orange-600/20 text-orange-400 border border-orange-500/30 rounded-lg hover:bg-orange-600/30 transition-colors disabled:opacity-50"
+            @click="fetchMSI()"
+            :disabled="loadingMSI"
+            class="flex items-center gap-2 px-3 py-1.5 text-sm bg-purple-600/20 text-purple-400 border border-purple-500/30 rounded-lg hover:bg-purple-600/30 transition-colors disabled:opacity-50"
           >
-            <svg :class="['w-4 h-4', loadingTechnical && 'animate-spin']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg :class="['w-4 h-4', loadingMSI && 'animate-spin']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
-            {{ loadingTechnical ? 'Analyzing...' : 'Analyze Technical' }}
+            {{ loadingMSI ? 'Loading...' : 'Refresh MSI' }}
           </button>
-          <span class="text-xs text-dark-500">(Sample data)</span>
         </div>
       </div>
 
       <!-- Error State -->
-      <div v-if="technicalError" class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl mb-4">
-        <p class="text-sm text-red-400">{{ technicalError }}</p>
-        <p class="text-xs text-red-400/70 mt-1">Pastikan TradingView chart terhubung dan mengirim data OHLC.</p>
+      <div v-if="msiError" class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl mb-4">
+        <p class="text-sm text-red-400">{{ msiError }}</p>
       </div>
 
       <!-- Loading State -->
-      <div v-else-if="loadingTechnical" class="text-center py-8 text-dark-400">
+      <div v-else-if="loadingMSI" class="text-center py-8 text-dark-400">
         <svg class="w-8 h-8 animate-spin mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
         </svg>
-        <p>Menganalisis data teknikal...</p>
+        <p>Memuat Market Stability Index...</p>
       </div>
 
-      <!-- Day Prediction Summary (Card Besar) -->
-      <div v-else-if="technicalAnalysis?.combined_overall" :class="[
+      <!-- MSI Summary -->
+      <div v-else-if="msiData" :class="[
         'p-6 rounded-xl mb-6 border-2',
-        technicalAnalysis.combined_overall.status === 'danger' ? 'bg-red-500/10 border-red-500/40' :
-        technicalAnalysis.combined_overall.status === 'caution' ? 'bg-yellow-500/10 border-yellow-500/40' :
+        msiData.status === 'DANGER' ? 'bg-red-500/10 border-red-500/40' :
+        msiData.status === 'CAUTION' ? 'bg-yellow-500/10 border-yellow-500/40' :
         'bg-green-500/10 border-green-500/40'
       ]">
-        <div class="flex items-center gap-4 mb-4">
+        <div class="flex items-start gap-4 mb-4">
           <span :class="[
-            'text-4xl font-bold',
-            technicalAnalysis.combined_overall.status === 'danger' ? 'text-red-400' :
-            technicalAnalysis.combined_overall.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
+            'text-4xl font-bold flex-shrink-0',
+            msiData.status === 'DANGER' ? 'text-red-400' :
+            msiData.status === 'CAUTION' ? 'text-yellow-400' : 'text-green-400'
           ]">
-            {{ technicalAnalysis.combined_overall.status === 'danger' ? '🔴 DANGER' : 
-               technicalAnalysis.combined_overall.status === 'caution' ? '🟡 CAUTION' : '🟢 SAFE' }}
+            {{ msiData.status === 'DANGER' ? '🔴 UNSTABLE' : 
+               msiData.status === 'CAUTION' ? '🟡 CAUTION' : '🟢 STABLE' }}
           </span>
-          <div class="flex-1">
-            <h3 class="text-xl font-bold mb-1">Kesimpulan Analisis Teknikal</h3>
-            <p class="text-sm text-dark-400">Berdasarkan analisis M15, H1, dan H4 dengan 7 modul</p>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-2">
+              <h3 class="text-xl font-bold">Market Stability Index</h3>
+              <!-- AI Enhanced Badge -->
+              <span v-if="msiData.ai_enhanced" class="px-2 py-1 bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-medium flex items-center gap-1 flex-shrink-0">
+                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                </svg>
+                AI Enhanced
+              </span>
+            </div>
+            <p class="text-sm text-dark-400 mb-3">Berdasarkan DXY, VIX, GVZ, Yield, S&P500, dan Korelasi</p>
           </div>
-          <div class="text-right">
+          <div class="text-right flex-shrink-0">
             <div class="text-3xl font-bold" :class="[
-              technicalAnalysis.combined_overall.status === 'danger' ? 'text-red-400' :
-              technicalAnalysis.combined_overall.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
+              msiData.status === 'DANGER' ? 'text-red-400' :
+              msiData.status === 'CAUTION' ? 'text-yellow-400' : 'text-green-400'
             ]">
-              {{ technicalAnalysis.combined_overall.risk_score }}/100
+              {{ msiData.msi }}/100
             </div>
-            <div class="text-xs text-dark-400">Risk Score</div>
-            <div class="text-sm font-medium mt-1" :class="[
-              technicalAnalysis.combined_overall.status === 'danger' ? 'text-red-400' :
-              technicalAnalysis.combined_overall.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-            ]">
-              {{ technicalAnalysis.combined_overall.confidence }}% Confidence
-            </div>
+            <div class="text-xs text-dark-400">MSI Score</div>
           </div>
         </div>
         
-        <p class="text-lg text-dark-200 mb-4 font-medium">{{ technicalAnalysis.combined_overall.recommendation }}</p>
+        <!-- AI Information for MSI - Improved Layout -->
+        <div v-if="msiData.ai_enhanced" class="mb-4 p-4 bg-gradient-to-br from-purple-500/10 via-blue-500/5 to-purple-500/10 border border-purple-500/30 rounded-xl shadow-lg">
+          <div class="flex items-center gap-3 mb-4 pb-3 border-b border-purple-500/20">
+            <div class="p-2 bg-purple-500/20 rounded-lg">
+              <svg class="w-5 h-5 text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+              </svg>
+            </div>
+            <div class="flex-1">
+              <h4 class="text-sm font-semibold text-purple-300 mb-0.5">AI Analysis (Groq)</h4>
+              <p class="text-xs text-dark-400">Powered by Groq AI for enhanced market analysis</p>
+            </div>
+            <!-- AI Confidence Badge -->
+            <div v-if="msiData.ai_confidence" class="flex items-center gap-3 px-3 py-2 bg-purple-500/20 rounded-lg border border-purple-500/30">
+              <div class="flex flex-col items-end">
+                <span class="text-xs text-dark-400 mb-0.5">Confidence</span>
+                <span class="text-lg font-bold text-purple-300">{{ msiData.ai_confidence }}%</span>
+              </div>
+              <div class="w-14 h-14 relative flex items-center justify-center">
+                <svg class="w-14 h-14 transform -rotate-90" viewBox="0 0 36 36">
+                  <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" stroke-width="2.5" class="text-dark-700/50"/>
+                  <circle 
+                    cx="18" cy="18" r="16" fill="none" 
+                    :stroke-dasharray="`${(msiData.ai_confidence / 100) * 100.48}, 100.48`"
+                    stroke-width="2.5" 
+                    stroke-linecap="round"
+                    class="text-purple-500 transition-all duration-500"
+                  />
+                </svg>
+                <div class="absolute inset-0 flex items-center justify-center">
+                  <span class="text-xs font-semibold text-purple-400">{{ msiData.ai_confidence }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- AI Recommendation - Enhanced -->
+          <div v-if="msiData.ai_recommendation" class="mb-3 p-4 bg-dark-800/60 rounded-lg border border-purple-500/20 shadow-inner">
+            <div class="flex items-start gap-3">
+              <div class="p-2 bg-blue-500/20 rounded-lg flex-shrink-0">
+                <svg class="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                </svg>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-xs font-semibold text-blue-300 mb-2 uppercase tracking-wide">AI Recommendation</p>
+                <p class="text-sm text-dark-100 leading-relaxed">{{ msiData.ai_recommendation }}</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- AI Confidence Bar - Alternative Display -->
+          <div v-if="msiData.ai_confidence" class="mb-3 hidden md:block">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-dark-400">AI Confidence Level</span>
+              <span class="text-sm font-bold text-purple-400">{{ msiData.ai_confidence }}%</span>
+            </div>
+            <div class="w-full h-2.5 bg-dark-700/50 rounded-full overflow-hidden shadow-inner">
+              <div 
+                class="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500 rounded-full transition-all duration-500 shadow-lg"
+                :style="{ width: msiData.ai_confidence + '%' }"
+              ></div>
+            </div>
+            <div class="flex items-center justify-between mt-1 text-xs text-dark-500">
+              <span>Low</span>
+              <span>Medium</span>
+              <span>High</span>
+            </div>
+          </div>
+          
+          <!-- AI Reasoning (Collapsible) - Enhanced -->
+          <details v-if="msiData.ai_reasoning" class="group">
+            <summary class="cursor-pointer flex items-center justify-between p-3 bg-dark-800/40 hover:bg-dark-800/60 rounded-lg border border-purple-500/20 transition-colors">
+              <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-purple-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+                <span class="text-sm font-medium text-purple-300">AI Reasoning & Analysis</span>
+              </div>
+              <span class="text-xs text-dark-500 group-open:hidden">Klik untuk detail</span>
+              <span class="text-xs text-dark-500 hidden group-open:inline">Sembunyikan</span>
+            </summary>
+            <div class="mt-3 p-4 bg-dark-900/60 rounded-lg border border-purple-500/10 shadow-inner">
+              <div class="prose prose-invert max-w-none">
+                <p class="text-sm text-dark-200 leading-relaxed whitespace-pre-line">{{ msiData.ai_reasoning }}</p>
+              </div>
+            </div>
+          </details>
+        </div>
         
-        <!-- Stats Row -->
-        <div class="flex flex-wrap gap-3 text-sm mb-4">
-          <span class="px-3 py-1.5 bg-dark-800 rounded-lg">
-            📊 Timeframes: <span class="text-white font-medium">3 (M15, H1, H4)</span>
-          </span>
-          <span class="px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg border border-red-500/30">
-            🔴 Danger: {{ technicalAnalysis.combined_overall.timeframe_summary?.danger || 0 }}
-          </span>
-          <span class="px-3 py-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg border border-yellow-500/30">
-            🟡 Caution: {{ technicalAnalysis.combined_overall.timeframe_summary?.caution || 0 }}
-          </span>
-          <span class="px-3 py-1.5 bg-green-500/20 text-green-400 rounded-lg border border-green-500/30">
-            🟢 Safe: {{ technicalAnalysis.combined_overall.timeframe_summary?.safe || 0 }}
-          </span>
+        <!-- Message -->
+        <div class="mb-4">
+          <p class="text-lg text-dark-200 font-medium">{{ msiData.message }}</p>
         </div>
+        
+         <!-- Details -->
+         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+           <div 
+             v-if="msiData.details.dxy !== null" 
+             @click="openIndicatorInfo('dxy', msiData.details.dxy, msiData.details.dxyScore)"
+             class="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 cursor-pointer hover:border-primary-500/50 hover:bg-dark-800 transition-colors"
+             title="Klik untuk informasi detail"
+           >
+             <div class="text-xs text-dark-400 mb-1">DXY</div>
+             <div class="text-lg font-bold text-dark-200">{{ msiData.details.dxy?.toFixed(2) || 'N/A' }}</div>
+             <div class="text-xs text-dark-500 mt-1">Score: {{ msiData.details.dxyScore || 'N/A' }}</div>
+           </div>
+           <div 
+             v-if="msiData.details.vix !== null" 
+             @click="openIndicatorInfo('vix', msiData.details.vix, msiData.details.vixScore)"
+             class="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 cursor-pointer hover:border-primary-500/50 hover:bg-dark-800 transition-colors"
+             title="Klik untuk informasi detail"
+           >
+             <div class="text-xs text-dark-400 mb-1">VIX</div>
+             <div class="text-lg font-bold text-dark-200">{{ msiData.details.vix?.toFixed(2) || 'N/A' }}</div>
+             <div class="text-xs text-dark-500 mt-1">Score: {{ msiData.details.vixScore || 'N/A' }}</div>
+           </div>
+           <div 
+             v-if="msiData.details.gvz !== null" 
+             @click="openIndicatorInfo('gvz', msiData.details.gvz, msiData.details.gvzScore)"
+             class="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 cursor-pointer hover:border-primary-500/50 hover:bg-dark-800 transition-colors"
+             title="Klik untuk informasi detail"
+           >
+             <div class="text-xs text-dark-400 mb-1">GVZ</div>
+             <div class="text-lg font-bold text-dark-200">{{ msiData.details.gvz?.toFixed(2) || 'N/A' }}</div>
+             <div class="text-xs text-dark-500 mt-1">Score: {{ msiData.details.gvzScore || 'N/A' }}</div>
+           </div>
+           <div 
+             v-if="msiData.details.us10y !== null" 
+             @click="openIndicatorInfo('yield', msiData.details.us10y, msiData.details.yieldScore)"
+             class="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 cursor-pointer hover:border-primary-500/50 hover:bg-dark-800 transition-colors"
+             title="Klik untuk informasi detail"
+           >
+             <div class="text-xs text-dark-400 mb-1">10Y Yield</div>
+             <div class="text-lg font-bold text-dark-200">{{ msiData.details.us10y?.toFixed(2) || 'N/A' }}%</div>
+             <div class="text-xs text-dark-500 mt-1">Score: {{ msiData.details.yieldScore || 'N/A' }}</div>
+           </div>
+           <div 
+             v-if="msiData.details.spx !== null" 
+             @click="openIndicatorInfo('spx', msiData.details.spx, msiData.details.spxScore)"
+             class="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 cursor-pointer hover:border-primary-500/50 hover:bg-dark-800 transition-colors"
+             title="Klik untuk informasi detail"
+           >
+             <div class="text-xs text-dark-400 mb-1">S&P500 (ES)</div>
+             <div class="text-lg font-bold text-dark-200">{{ msiData.details.spx?.toFixed(2) || 'N/A' }}</div>
+             <div class="text-xs text-dark-500 mt-1">Score: {{ msiData.details.spxScore || 'N/A' }}</div>
+           </div>
+           <div 
+             v-if="msiData.details.correlation !== null" 
+             @click="openIndicatorInfo('correlation', msiData.details.correlation, msiData.details.correlationScore)"
+             class="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 cursor-pointer hover:border-primary-500/50 hover:bg-dark-800 transition-colors"
+             title="Klik untuk informasi detail"
+           >
+             <div class="text-xs text-dark-400 mb-1">Avg Correlation</div>
+             <div class="text-lg font-bold text-dark-200">{{ msiData.details.correlation?.toFixed(2) || 'N/A' }}</div>
+             <div class="text-xs text-dark-500 mt-1">Score: {{ msiData.details.correlationScore || 'N/A' }}</div>
+           </div>
+         </div>
 
-        <!-- Timeframe Breakdown -->
-        <div v-if="technicalAnalysis?.predictions" class="grid md:grid-cols-3 gap-3 mt-4">
-          <!-- M15 Summary -->
-          <div v-if="technicalAnalysis.predictions.M15" :class="[
-            'p-3 rounded-lg border',
-            technicalAnalysis.predictions.M15.overall.status === 'danger' ? 'bg-red-500/5 border-red-500/20' :
-            technicalAnalysis.predictions.M15.overall.status === 'caution' ? 'bg-yellow-500/5 border-yellow-500/20' :
-            'bg-green-500/5 border-green-500/20'
-          ]">
-            <div class="flex items-center justify-between mb-2">
-              <span class="font-bold text-sm">M15</span>
-              <span :class="[
-                'px-2 py-0.5 rounded text-xs font-medium',
-                technicalAnalysis.predictions.M15.overall.status === 'danger' ? 'bg-red-500/30 text-red-300' :
-                technicalAnalysis.predictions.M15.overall.status === 'caution' ? 'bg-yellow-500/30 text-yellow-300' :
-                'bg-green-500/30 text-green-300'
-              ]">
-                {{ technicalAnalysis.predictions.M15.overall.status_label }}
-              </span>
-            </div>
-            <div class="text-xs text-dark-400">
-              Risk: <span class="font-bold" :class="[
-                technicalAnalysis.predictions.M15.overall.status === 'danger' ? 'text-red-400' :
-                technicalAnalysis.predictions.M15.overall.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-              ]">{{ technicalAnalysis.predictions.M15.overall.risk_score }}/100</span>
-            </div>
-          </div>
+         <!-- Cross-Pair Correlations Detail -->
+         <div v-if="msiData.details.correlations" class="mt-4 p-4 bg-dark-800/50 rounded-lg border border-dark-700/50">
+           <h4 class="text-sm font-semibold text-dark-300 mb-3">📊 Cross-Pair Correlation Index</h4>
+           <p class="text-xs text-dark-400 mb-3">
+             Korelasi rendah → pasar tidak seragam (CHOPPY) → aman untuk EA grid<br>
+             Korelasi tinggi → pasar bergerak searah (TRENDING) → berbahaya untuk EA grid
+           </p>
+           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+             <div v-if="msiData.details.correlations.xauusd_eurusd !== null" class="p-2.5 bg-dark-900/50 rounded border" :class="[
+               Math.abs(msiData.details.correlations.xauusd_eurusd) < 0.3 ? 'border-green-500/30' :
+               Math.abs(msiData.details.correlations.xauusd_eurusd) < 0.6 ? 'border-yellow-500/30' :
+               'border-red-500/30'
+             ]">
+               <div class="text-xs text-dark-400 mb-1">XAUUSD ↔ EURUSD</div>
+               <div class="text-sm font-bold" :class="[
+                 Math.abs(msiData.details.correlations.xauusd_eurusd) < 0.3 ? 'text-green-400' :
+                 Math.abs(msiData.details.correlations.xauusd_eurusd) < 0.6 ? 'text-yellow-400' :
+                 'text-red-400'
+               ]">
+                 {{ msiData.details.correlations.xauusd_eurusd.toFixed(3) }}
+               </div>
+               <div class="text-xs text-dark-500 mt-1">
+                 {{ Math.abs(msiData.details.correlations.xauusd_eurusd) < 0.3 ? '🟢 Low' :
+                    Math.abs(msiData.details.correlations.xauusd_eurusd) < 0.6 ? '🟡 Medium' : '🔴 High' }}
+               </div>
+             </div>
+             <div v-if="msiData.details.correlations.xauusd_gbpusd !== null" class="p-2.5 bg-dark-900/50 rounded border" :class="[
+               Math.abs(msiData.details.correlations.xauusd_gbpusd) < 0.3 ? 'border-green-500/30' :
+               Math.abs(msiData.details.correlations.xauusd_gbpusd) < 0.6 ? 'border-yellow-500/30' :
+               'border-red-500/30'
+             ]">
+               <div class="text-xs text-dark-400 mb-1">XAUUSD ↔ GBPUSD</div>
+               <div class="text-sm font-bold" :class="[
+                 Math.abs(msiData.details.correlations.xauusd_gbpusd) < 0.3 ? 'text-green-400' :
+                 Math.abs(msiData.details.correlations.xauusd_gbpusd) < 0.6 ? 'text-yellow-400' :
+                 'text-red-400'
+               ]">
+                 {{ msiData.details.correlations.xauusd_gbpusd.toFixed(3) }}
+               </div>
+               <div class="text-xs text-dark-500 mt-1">
+                 {{ Math.abs(msiData.details.correlations.xauusd_gbpusd) < 0.3 ? '🟢 Low' :
+                    Math.abs(msiData.details.correlations.xauusd_gbpusd) < 0.6 ? '🟡 Medium' : '🔴 High' }}
+               </div>
+             </div>
+             <div v-if="msiData.details.correlations.xauusd_usdjpy !== null" class="p-2.5 bg-dark-900/50 rounded border" :class="[
+               Math.abs(msiData.details.correlations.xauusd_usdjpy) < 0.3 ? 'border-green-500/30' :
+               Math.abs(msiData.details.correlations.xauusd_usdjpy) < 0.6 ? 'border-yellow-500/30' :
+               'border-red-500/30'
+             ]">
+               <div class="text-xs text-dark-400 mb-1">XAUUSD ↔ USDJPY</div>
+               <div class="text-sm font-bold" :class="[
+                 Math.abs(msiData.details.correlations.xauusd_usdjpy) < 0.3 ? 'text-green-400' :
+                 Math.abs(msiData.details.correlations.xauusd_usdjpy) < 0.6 ? 'text-yellow-400' :
+                 'text-red-400'
+               ]">
+                 {{ msiData.details.correlations.xauusd_usdjpy.toFixed(3) }}
+               </div>
+               <div class="text-xs text-dark-500 mt-1">
+                 {{ Math.abs(msiData.details.correlations.xauusd_usdjpy) < 0.3 ? '🟢 Low' :
+                    Math.abs(msiData.details.correlations.xauusd_usdjpy) < 0.6 ? '🟡 Medium' : '🔴 High' }}
+               </div>
+             </div>
+             <div v-if="msiData.details.correlations.eurusd_gbpusd !== null" class="p-2.5 bg-dark-900/50 rounded border" :class="[
+               Math.abs(msiData.details.correlations.eurusd_gbpusd) < 0.3 ? 'border-green-500/30' :
+               Math.abs(msiData.details.correlations.eurusd_gbpusd) < 0.6 ? 'border-yellow-500/30' :
+               'border-red-500/30'
+             ]">
+               <div class="text-xs text-dark-400 mb-1">EURUSD ↔ GBPUSD</div>
+               <div class="text-sm font-bold" :class="[
+                 Math.abs(msiData.details.correlations.eurusd_gbpusd) < 0.3 ? 'text-green-400' :
+                 Math.abs(msiData.details.correlations.eurusd_gbpusd) < 0.6 ? 'text-yellow-400' :
+                 'text-red-400'
+               ]">
+                 {{ msiData.details.correlations.eurusd_gbpusd.toFixed(3) }}
+               </div>
+               <div class="text-xs text-dark-500 mt-1">
+                 {{ Math.abs(msiData.details.correlations.eurusd_gbpusd) < 0.3 ? '🟢 Low' :
+                    Math.abs(msiData.details.correlations.eurusd_gbpusd) < 0.6 ? '🟡 Medium' : '🔴 High' }}
+               </div>
+             </div>
+           </div>
+         </div>
 
-          <!-- H1 Summary -->
-          <div v-if="technicalAnalysis.predictions.H1" :class="[
-            'p-3 rounded-lg border',
-            technicalAnalysis.predictions.H1.overall.status === 'danger' ? 'bg-red-500/5 border-red-500/20' :
-            technicalAnalysis.predictions.H1.overall.status === 'caution' ? 'bg-yellow-500/5 border-yellow-500/20' :
-            'bg-green-500/5 border-green-500/20'
-          ]">
-            <div class="flex items-center justify-between mb-2">
-              <span class="font-bold text-sm">H1</span>
-              <span :class="[
-                'px-2 py-0.5 rounded text-xs font-medium',
-                technicalAnalysis.predictions.H1.overall.status === 'danger' ? 'bg-red-500/30 text-red-300' :
-                technicalAnalysis.predictions.H1.overall.status === 'caution' ? 'bg-yellow-500/30 text-yellow-300' :
-                'bg-green-500/30 text-green-300'
-              ]">
-                {{ technicalAnalysis.predictions.H1.overall.status_label }}
-              </span>
-            </div>
-            <div class="text-xs text-dark-400">
-              Risk: <span class="font-bold" :class="[
-                technicalAnalysis.predictions.H1.overall.status === 'danger' ? 'text-red-400' :
-                technicalAnalysis.predictions.H1.overall.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-              ]">{{ technicalAnalysis.predictions.H1.overall.risk_score }}/100</span>
-            </div>
-          </div>
-
-          <!-- H4 Summary -->
-          <div v-if="technicalAnalysis.predictions.H4" :class="[
-            'p-3 rounded-lg border',
-            technicalAnalysis.predictions.H4.overall.status === 'danger' ? 'bg-red-500/5 border-red-500/20' :
-            technicalAnalysis.predictions.H4.overall.status === 'caution' ? 'bg-yellow-500/5 border-yellow-500/20' :
-            'bg-green-500/5 border-green-500/20'
-          ]">
-            <div class="flex items-center justify-between mb-2">
-              <span class="font-bold text-sm">H4</span>
-              <span :class="[
-                'px-2 py-0.5 rounded text-xs font-medium',
-                technicalAnalysis.predictions.H4.overall.status === 'danger' ? 'bg-red-500/30 text-red-300' :
-                technicalAnalysis.predictions.H4.overall.status === 'caution' ? 'bg-yellow-500/30 text-yellow-300' :
-                'bg-green-500/30 text-green-300'
-              ]">
-                {{ technicalAnalysis.predictions.H4.overall.status_label }}
-              </span>
-            </div>
-            <div class="text-xs text-dark-400">
-              Risk: <span class="font-bold" :class="[
-                technicalAnalysis.predictions.H4.overall.status === 'danger' ? 'text-red-400' :
-                technicalAnalysis.predictions.H4.overall.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-              ]">{{ technicalAnalysis.predictions.H4.overall.risk_score }}/100</span>
-            </div>
-          </div>
+        <!-- Updated At -->
+        <div v-if="msiData.updatedAt" class="text-xs text-dark-500">
+          Updated: {{ new Date(msiData.updatedAt).toLocaleString() }}
         </div>
-      </div>
-
-      <!-- Module Details per Timeframe -->
-      <div v-if="technicalAnalysis?.predictions" class="space-y-4">
-        <!-- M15 Modules -->
-        <details v-if="technicalAnalysis.predictions.M15?.modules" class="group">
-          <summary class="cursor-pointer text-sm font-semibold text-dark-300 mb-4 flex items-center gap-2 hover:text-white">
-            <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-            </svg>
-            📊 Detail Modul M15 (7 modul)
-          </summary>
-          <div class="mt-4 space-y-3">
-            <div 
-              v-for="(module, key) in technicalAnalysis.predictions.M15.modules" 
-              :key="key"
-              :class="[
-                'p-4 rounded-lg border',
-                module.status === 'danger' || module.status === 'extreme_shock' || module.status === 'strong_trend' || module.status === 'shock' ? 'bg-red-500/5 border-red-500/20' :
-                module.status === 'caution' || module.status === 'moderately_trending' || module.status === 'high_risk' ? 'bg-yellow-500/5 border-yellow-500/20' :
-                module.status === 'insufficient_data' ? 'bg-gray-500/5 border-gray-500/20' :
-                'bg-green-500/5 border-green-500/20'
-              ]"
-            >
-              <div class="flex items-center justify-between mb-2">
-                <div>
-                  <h4 class="font-medium text-sm">{{ module.module }}</h4>
-                  <p class="text-xs text-dark-400 mt-0.5">{{ module.status_label }}</p>
-                </div>
-                <div class="text-right">
-                  <div class="text-sm font-bold" :class="[
-                    module.status === 'danger' || module.status === 'extreme_shock' ? 'text-red-400' :
-                    module.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-                  ]">
-                    {{ module.confidence }}%
-                  </div>
-                </div>
-              </div>
-              
-              <!-- Reasons -->
-              <div v-if="module.reasons && module.reasons.length > 0" class="mt-2">
-                <details class="text-xs">
-                  <summary class="cursor-pointer text-dark-400 hover:text-dark-300 mb-1">
-                    📋 Alasan ({{ module.reasons.length }})
-                  </summary>
-                  <div class="mt-2 space-y-1.5 pl-2 border-l-2 border-orange-500/30">
-                    <div 
-                      v-for="(reason, idx) in module.reasons" 
-                      :key="idx"
-                      class="p-2 bg-orange-500/5 rounded"
-                    >
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="font-medium text-orange-300">{{ reason.factor }}</span>
-                        <span v-if="reason.weight > 0" class="text-orange-400">+{{ reason.weight }}%</span>
-                      </div>
-                      <div class="text-dark-400 text-xs mb-1">
-                        <span class="font-medium">{{ reason.value }}</span>
-                      </div>
-                      <div class="text-dark-500 text-xs italic">
-                        {{ reason.explanation }}
-                      </div>
-                    </div>
-                  </div>
-                </details>
-              </div>
-              
-              <p class="text-xs text-dark-400 mt-2">{{ module.recommendation }}</p>
-            </div>
-          </div>
-        </details>
-
-        <!-- H1 Modules -->
-        <details v-if="technicalAnalysis.predictions.H1?.modules" class="group">
-          <summary class="cursor-pointer text-sm font-semibold text-dark-300 mb-4 flex items-center gap-2 hover:text-white">
-            <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-            </svg>
-            📊 Detail Modul H1 (7 modul)
-          </summary>
-          <div class="mt-4 space-y-3">
-            <div 
-              v-for="(module, key) in technicalAnalysis.predictions.H1.modules" 
-              :key="key"
-              :class="[
-                'p-4 rounded-lg border',
-                module.status === 'danger' || module.status === 'extreme_shock' || module.status === 'strong_trend' || module.status === 'shock' ? 'bg-red-500/5 border-red-500/20' :
-                module.status === 'caution' || module.status === 'moderately_trending' || module.status === 'high_risk' ? 'bg-yellow-500/5 border-yellow-500/20' :
-                module.status === 'insufficient_data' ? 'bg-gray-500/5 border-gray-500/20' :
-                'bg-green-500/5 border-green-500/20'
-              ]"
-            >
-              <div class="flex items-center justify-between mb-2">
-                <div>
-                  <h4 class="font-medium text-sm">{{ module.module }}</h4>
-                  <p class="text-xs text-dark-400 mt-0.5">{{ module.status_label }}</p>
-                </div>
-                <div class="text-right">
-                  <div class="text-sm font-bold" :class="[
-                    module.status === 'danger' || module.status === 'extreme_shock' ? 'text-red-400' :
-                    module.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-                  ]">
-                    {{ module.confidence }}%
-                  </div>
-                </div>
-              </div>
-              
-              <!-- Reasons -->
-              <div v-if="module.reasons && module.reasons.length > 0" class="mt-2">
-                <details class="text-xs">
-                  <summary class="cursor-pointer text-dark-400 hover:text-dark-300 mb-1">
-                    📋 Alasan ({{ module.reasons.length }})
-                  </summary>
-                  <div class="mt-2 space-y-1.5 pl-2 border-l-2 border-orange-500/30">
-                    <div 
-                      v-for="(reason, idx) in module.reasons" 
-                      :key="idx"
-                      class="p-2 bg-orange-500/5 rounded"
-                    >
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="font-medium text-orange-300">{{ reason.factor }}</span>
-                        <span v-if="reason.weight > 0" class="text-orange-400">+{{ reason.weight }}%</span>
-                      </div>
-                      <div class="text-dark-400 text-xs mb-1">
-                        <span class="font-medium">{{ reason.value }}</span>
-                      </div>
-                      <div class="text-dark-500 text-xs italic">
-                        {{ reason.explanation }}
-                      </div>
-                    </div>
-                  </div>
-                </details>
-              </div>
-              
-              <p class="text-xs text-dark-400 mt-2">{{ module.recommendation }}</p>
-            </div>
-          </div>
-        </details>
-
-        <!-- H4 Modules -->
-        <details v-if="technicalAnalysis.predictions.H4?.modules" class="group">
-          <summary class="cursor-pointer text-sm font-semibold text-dark-300 mb-4 flex items-center gap-2 hover:text-white">
-            <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-            </svg>
-            📊 Detail Modul H4 (7 modul)
-          </summary>
-          <div class="mt-4 space-y-3">
-            <div 
-              v-for="(module, key) in technicalAnalysis.predictions.H4.modules" 
-              :key="key"
-              :class="[
-                'p-4 rounded-lg border',
-                module.status === 'danger' || module.status === 'extreme_shock' || module.status === 'strong_trend' || module.status === 'shock' ? 'bg-red-500/5 border-red-500/20' :
-                module.status === 'caution' || module.status === 'moderately_trending' || module.status === 'high_risk' ? 'bg-yellow-500/5 border-yellow-500/20' :
-                module.status === 'insufficient_data' ? 'bg-gray-500/5 border-gray-500/20' :
-                'bg-green-500/5 border-green-500/20'
-              ]"
-            >
-              <div class="flex items-center justify-between mb-2">
-                <div>
-                  <h4 class="font-medium text-sm">{{ module.module }}</h4>
-                  <p class="text-xs text-dark-400 mt-0.5">{{ module.status_label }}</p>
-                </div>
-                <div class="text-right">
-                  <div class="text-sm font-bold" :class="[
-                    module.status === 'danger' || module.status === 'extreme_shock' ? 'text-red-400' :
-                    module.status === 'caution' ? 'text-yellow-400' : 'text-green-400'
-                  ]">
-                    {{ module.confidence }}%
-                  </div>
-                </div>
-              </div>
-              
-              <!-- Reasons -->
-              <div v-if="module.reasons && module.reasons.length > 0" class="mt-2">
-                <details class="text-xs">
-                  <summary class="cursor-pointer text-dark-400 hover:text-dark-300 mb-1">
-                    📋 Alasan ({{ module.reasons.length }})
-                  </summary>
-                  <div class="mt-2 space-y-1.5 pl-2 border-l-2 border-orange-500/30">
-                    <div 
-                      v-for="(reason, idx) in module.reasons" 
-                      :key="idx"
-                      class="p-2 bg-orange-500/5 rounded"
-                    >
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="font-medium text-orange-300">{{ reason.factor }}</span>
-                        <span v-if="reason.weight > 0" class="text-orange-400">+{{ reason.weight }}%</span>
-                      </div>
-                      <div class="text-dark-400 text-xs mb-1">
-                        <span class="font-medium">{{ reason.value }}</span>
-                      </div>
-                      <div class="text-dark-500 text-xs italic">
-                        {{ reason.explanation }}
-                      </div>
-                    </div>
-                  </div>
-                </details>
-              </div>
-              
-              <p class="text-xs text-dark-400 mt-2">{{ module.recommendation }}</p>
-            </div>
-          </div>
-        </details>
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="!loadingTechnical && !technicalError" class="text-center py-8 text-dark-400">
-        <span class="text-4xl mb-2 block">📊</span>
-        <p>Klik "Analyze Technical" untuk memulai analisis.</p>
-        <p class="text-sm mt-1">Pastikan TradingView chart terhubung dan mengirim data OHLC.</p>
-      </div>
-    </div>
-
-    <!-- 📈 Learning Statistics (Collapsible) -->
-    <div class="card p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <span class="text-2xl">📈</span>
-          <div>
-            <h2 class="text-lg font-semibold">Learning Statistics</h2>
-            <p class="text-sm text-dark-400">Pola historis dari news yang sudah ditandai</p>
-          </div>
-        </div>
-        <button 
-          @click="fetchPredictionStats"
-          :disabled="loadingStats"
-          class="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg hover:bg-blue-600/30 transition-colors disabled:opacity-50"
-        >
-          <svg :class="['w-4 h-4', loadingStats && 'animate-spin']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-          </svg>
-          {{ loadingStats ? 'Loading...' : 'Load Stats' }}
-        </button>
-      </div>
-
-      <details class="group">
-        <summary class="cursor-pointer text-sm font-semibold text-dark-300 hover:text-white mb-4 flex items-center gap-2">
-          <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-          </svg>
-          Tampilkan Detail Statistik
-        </summary>
-
-        <div class="mt-4">
-          <!-- Loading State -->
-          <div v-if="loadingStats" class="flex items-center justify-center py-8">
-            <div class="spinner mr-2"></div>
-            <span class="text-dark-400">Memuat statistik...</span>
-          </div>
-
-          <!-- Error State -->
-          <div v-else-if="predictionStatsError" class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl">
-            <p class="text-sm text-red-400">Error: {{ predictionStatsError }}</p>
-            <button @click="fetchPredictionStats" class="mt-2 text-xs text-red-300 hover:text-red-200">
-              Coba lagi
-            </button>
-          </div>
-
-          <!-- Stats Content -->
-          <div v-else-if="predictionStats">
-            <!-- Summary Stats -->
-            <div class="grid grid-cols-3 gap-4 mb-6">
-              <div class="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
-                <div class="text-xs text-dark-400 mb-1">Total Marked</div>
-                <div class="text-2xl font-bold text-white">{{ predictionStats.total_marked || 0 }}</div>
-                <div class="text-xs text-dark-500 mt-1">dalam {{ predictionStats.period_days }} hari</div>
-              </div>
-              <div class="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
-                <div class="text-xs text-dark-400 mb-1">Unique Events</div>
-                <div class="text-2xl font-bold text-blue-400">{{ predictionStats.unique_events || 0 }}</div>
-                <div class="text-xs text-dark-500 mt-1">event berbeda</div>
-              </div>
-              <div class="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
-                <div class="text-xs text-dark-400 mb-1">Learning Data</div>
-                <div class="text-2xl font-bold text-purple-400">{{ predictionStats.events?.length || 0 }}</div>
-                <div class="text-xs text-dark-500 mt-1">dengan statistik</div>
-              </div>
-            </div>
-
-            <!-- High Impact Events Stats -->
-            <div v-if="predictionStats?.high_impact_stats && Object.keys(predictionStats.high_impact_stats).length > 0" class="mb-6">
-              <h3 class="text-sm font-semibold text-orange-400 mb-3">🔥 Analisis High-Impact Events</h3>
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div 
-                  v-for="(stat, type) in predictionStats.high_impact_stats" 
-                  :key="type"
-                  class="p-3 bg-dark-800/50 rounded-lg border border-dark-700"
-                >
-                  <div class="flex items-center justify-between mb-2">
-                    <span class="font-medium text-sm">{{ type }}</span>
-                    <span class="text-xs text-dark-400">{{ stat.total }} events</span>
-                  </div>
-                  <div class="space-y-1">
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="text-red-400">Danger</span>
-                      <span>{{ stat.danger_pct }}%</span>
-                    </div>
-                    <div class="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
-                      <div class="h-full bg-red-500 rounded-full" :style="{ width: stat.danger_pct + '%' }"></div>
-                    </div>
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="text-yellow-400">Caution</span>
-                      <span>{{ stat.caution_pct }}%</span>
-                    </div>
-                    <div class="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
-                      <div class="h-full bg-yellow-500 rounded-full" :style="{ width: stat.caution_pct + '%' }"></div>
-                    </div>
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="text-green-400">Safe</span>
-                      <span>{{ stat.safe_pct }}%</span>
-                    </div>
-                    <div class="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
-                      <div class="h-full bg-green-500 rounded-full" :style="{ width: stat.safe_pct + '%' }"></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Learning Summary -->
-            <div v-if="predictionStats?.learning_summary" class="grid md:grid-cols-2 gap-4">
-              <div class="p-4 bg-red-500/5 border border-red-500/20 rounded-xl">
-                <h4 class="text-sm font-semibold text-red-400 mb-2">🔴 News Paling Berbahaya</h4>
-                <div v-if="predictionStats.learning_summary.most_dangerous?.length > 0" class="space-y-2">
-                  <div 
-                    v-for="(event, index) in predictionStats.learning_summary.most_dangerous.slice(0, 5)" 
-                    :key="index"
-                    class="flex items-center justify-between text-sm"
-                  >
-                    <div class="flex items-center gap-2">
-                      <span :class="getCurrencyClass(event.currency)" class="px-1.5 py-0.5 rounded text-xs">
-                        {{ event.currency }}
-                      </span>
-                      <span class="text-dark-300 truncate max-w-48">{{ event.title }}</span>
-                    </div>
-                    <span class="text-red-400 font-mono">{{ event.danger_pct }}%</span>
-                  </div>
-                </div>
-                <p v-else class="text-sm text-dark-500">Belum ada data.</p>
-              </div>
-              <div class="p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
-                <h4 class="text-sm font-semibold text-green-400 mb-2">🟢 News Paling Aman</h4>
-                <div v-if="predictionStats.learning_summary.most_safe?.length > 0" class="space-y-2">
-                  <div 
-                    v-for="(event, index) in predictionStats.learning_summary.most_safe.slice(0, 5)" 
-                    :key="index"
-                    class="flex items-center justify-between text-sm"
-                  >
-                    <div class="flex items-center gap-2">
-                      <span :class="getCurrencyClass(event.currency)" class="px-1.5 py-0.5 rounded text-xs">
-                        {{ event.currency }}
-                      </span>
-                      <span class="text-dark-300 truncate max-w-48">{{ event.title }}</span>
-                    </div>
-                    <span class="text-green-400 font-mono">{{ event.safe_pct }}%</span>
-                  </div>
-                </div>
-                <p v-else class="text-sm text-dark-500">Belum ada data.</p>
-              </div>
-            </div>
-
-            <!-- Advice -->
-            <div v-if="predictionStats?.learning_summary?.advice" class="mt-4 p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl">
-              <p class="text-sm text-blue-400">💡 {{ predictionStats.learning_summary.advice }}</p>
-            </div>
-          </div>
-
-          <!-- Empty State -->
-          <div v-else-if="!loadingStats" class="text-center py-8 text-dark-400">
-            <span class="text-4xl mb-2 block">📊</span>
-            <p class="text-sm">Klik "Load Stats" untuk melihat statistik pembelajaran.</p>
-            <p class="text-xs mt-1 text-dark-500">Tandai lebih banyak news untuk meningkatkan akurasi prediksi.</p>
-          </div>
-        </div>
-      </details>
-    </div>
-
-    <!-- News Table -->
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full">
-          <thead class="bg-dark-800/50">
-            <tr>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider w-12">
-                <input 
-                  type="checkbox" 
-                  @change="toggleSelectAll"
-                  :checked="selectedNews.length === filteredNews.length && filteredNews.length > 0"
-                  class="rounded border-dark-600 bg-dark-800 text-primary-500 focus:ring-primary-500"
-                />
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Date</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Time</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Currency</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Impact</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Event</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Actual</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Forecast</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Previous</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">EA Status</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-dark-400 uppercase tracking-wider">Actions</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-dark-800">
-            <tr v-if="loading">
-              <td colspan="10" class="px-4 py-12 text-center">
-                <div class="flex items-center justify-center gap-3">
-                  <div class="spinner"></div>
-                  <span class="text-dark-400">Loading news...</span>
-                </div>
-              </td>
-            </tr>
-            <tr v-else-if="filteredNews.length === 0">
-              <td colspan="10" class="px-4 py-12 text-center text-dark-400">
-                <div class="flex flex-col items-center gap-2">
-                  <svg class="w-12 h-12 text-dark-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/>
-                  </svg>
-                  <span>No news found for this date</span>
-                  <button @click="syncNews" class="mt-2 text-primary-400 hover:text-primary-300">
-                    Click to sync news
-                  </button>
-                </div>
-              </td>
-            </tr>
-            <tr 
-              v-for="news in filteredNews" 
-              :key="news.id"
-              :class="[
-                'hover:bg-dark-800/30 transition-colors',
-                news.should_disable_ea && 'bg-red-500/5'
-              ]"
-            >
-              <td class="px-4 py-3">
-                <input 
-                  type="checkbox" 
-                  :value="news.id"
-                  v-model="selectedNews"
-                  class="rounded border-dark-600 bg-dark-800 text-primary-500 focus:ring-primary-500"
-                />
-              </td>
-              <td class="px-4 py-3 font-mono text-xs text-dark-300">
-                {{ formatDate(news) }}
-              </td>
-              <td class="px-4 py-3 font-mono text-sm">
-                {{ news.formatted_time || 'All Day' }}
-              </td>
-              <td class="px-4 py-3">
-                <span :class="getCurrencyClass(news.currency)" class="px-2 py-1 rounded text-sm font-semibold">
-                  {{ news.currency }}
-                </span>
-              </td>
-              <td class="px-4 py-3">
-                <span :class="getImpactClass(news.impact)" class="px-2 py-1 rounded text-xs font-medium flex items-center gap-1 w-fit">
-                  <span :class="getImpactDotClass(news.impact)" class="w-2 h-2 rounded-full"></span>
-                  {{ news.impact }}
-                </span>
-              </td>
-              <td class="px-4 py-3">
-                <div class="font-medium">{{ news.title }}</div>
-                <div v-if="news.user_notes" class="text-xs text-dark-400 mt-1">
-                  📝 {{ news.user_notes }}
-                </div>
-              </td>
-              <td class="px-4 py-3 font-mono text-sm" :class="getValueClass(news.actual, news.forecast)">
-                {{ news.actual || '-' }}
-              </td>
-              <td class="px-4 py-3 font-mono text-sm text-dark-400">
-                {{ news.forecast || '-' }}
-              </td>
-              <td class="px-4 py-3 font-mono text-sm text-dark-400">
-                {{ news.previous || '-' }}
-              </td>
-              <td class="px-4 py-3">
-                <div class="flex items-center gap-2">
-                  <button 
-                    @click="cycleEaStatus(news)"
-                    :class="[
-                      'px-2 py-1 rounded text-xs font-medium border transition-colors',
-                      news.ea_status_color
-                    ]"
-                    :title="news.ea_status ? `EA Status: ${news.ea_status.toUpperCase()}` : 'Klik untuk menandai EA Status'"
-                  >
-                    {{ news.ea_status ? news.ea_status.toUpperCase() : '—' }}
-                  </button>
-                  <div v-if="news.should_disable_ea" class="text-xs text-red-400" title="EA will be disabled">
-                    ⚠️
-                  </div>
-                </div>
-              </td>
-              <td class="px-4 py-3">
-                <div class="flex items-center gap-2">
-                  <button 
-                    @click="openEditModal(news)"
-                    class="p-1.5 hover:bg-dark-700 rounded-lg transition-colors text-dark-400 hover:text-white"
-                    title="Edit EA Settings"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                    </svg>
-                  </button>
-                  <button 
-                    @click="toggleDisableEa(news)"
-                    :class="[
-                      'p-1.5 rounded-lg transition-colors',
-                      news.should_disable_ea ? 'bg-red-500/20 text-red-400' : 'hover:bg-dark-700 text-dark-400 hover:text-white'
-                    ]"
-                    :title="news.should_disable_ea ? 'EA Disabled' : 'Click to disable EA'"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
-                    </svg>
-                  </button>
-                  <button 
-                    @click="deleteNews(news)"
-                    class="p-1.5 hover:bg-red-600/20 rounded-lg transition-colors text-red-400"
-                    title="Delete event"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 7h12M10 11v6m4-6v6M9 7l1-2h4l1 2M5 7h14l-1 12H6L5 7z"/>
-                    </svg>
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- 🔥 High-Impact Events Reference Card -->
-    <div class="card p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <span class="text-2xl">📚</span>
-          <div>
-            <h2 class="text-lg font-semibold">Referensi High-Impact News</h2>
-            <p class="text-sm text-dark-400">Catatan: Impact bisa bervariasi, gunakan sebagai pertimbangan saja</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Notable Events Today -->
-      <div v-if="notableEvents.length > 0" class="mb-6">
-        <h3 class="text-sm font-semibold text-orange-400 mb-3">🔥 Notable Events Hari Ini ({{ selectedDate }})</h3>
-        <div class="space-y-3">
-          <div 
-            v-for="event in notableEvents" 
-            :key="event.id"
-            class="p-4 bg-dark-800/50 border border-dark-700 rounded-xl"
-          >
-            <div class="flex items-center justify-between mb-2">
-              <div class="flex items-center gap-2">
-                <span class="px-2 py-1 text-xs font-bold bg-orange-500/20 text-orange-400 rounded">
-                  {{ event.type }}
-                </span>
-                <span class="font-medium">{{ event.title }}</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <span class="text-sm text-dark-400">{{ event.time }}</span>
-                <span :class="getCurrencyClass(event.currency)" class="px-2 py-0.5 rounded text-xs">
-                  {{ event.currency }}
-                </span>
-                <span :class="getImpactClass(event.actual_impact)" class="px-2 py-0.5 rounded text-xs">
-                  {{ event.actual_impact }}
-                </span>
-              </div>
-            </div>
-            
-            <p class="text-sm text-dark-400 mb-2">{{ event.note }}</p>
-            
-            <!-- Historical Stats if available -->
-            <div v-if="event.historical_stats" class="flex items-center gap-4 text-xs">
-              <span class="text-dark-500">Berdasarkan {{ event.historical_stats.total }} history:</span>
-              <span class="text-red-400">Danger {{ event.historical_stats.danger_pct }}%</span>
-              <span class="text-yellow-400">Caution {{ event.historical_stats.caution_pct }}%</span>
-              <span class="text-green-400">Safe {{ event.historical_stats.safe_pct }}%</span>
-            </div>
-            
-            <!-- Current EA Status -->
-            <div v-if="event.ea_status" class="mt-2">
-              <span class="text-xs text-dark-500">Status saat ini: </span>
-              <span :class="[
-                'px-2 py-0.5 rounded text-xs font-medium',
-                event.ea_status === 'danger' ? 'bg-red-500/30 text-red-300' :
-                event.ea_status === 'caution' ? 'bg-yellow-500/30 text-yellow-300' :
-                'bg-green-500/30 text-green-300'
-              ]">{{ event.ea_status?.toUpperCase() }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Reference Guide -->
-      <details class="group">
-        <summary class="cursor-pointer flex items-center gap-2 text-sm font-semibold text-dark-300 hover:text-white">
-          <svg class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-          </svg>
-          📖 Panduan High-Impact Events
-        </summary>
-        
-        <div class="mt-4 grid md:grid-cols-2 gap-4">
-          <div v-for="(info, index) in referenceInfo" :key="index" class="p-4 bg-dark-800/30 rounded-xl border border-dark-700/50">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="px-2 py-1 text-xs font-bold bg-orange-500/20 text-orange-400 rounded">{{ info.type }}</span>
-              <span class="font-medium text-sm">{{ info.name }}</span>
-            </div>
-            <p class="text-xs text-dark-400 mb-2">{{ info.description }}</p>
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-dark-500">Typical Impact: 
-                <span :class="info.typical_impact === 'High' ? 'text-red-400' : info.typical_impact === 'Medium' ? 'text-yellow-400' : 'text-dark-300'">
-                  {{ info.typical_impact }}
-                </span>
-              </span>
-            </div>
-            <p class="text-xs text-blue-400 mt-1">💡 {{ info.advice }}</p>
-          </div>
-        </div>
-      </details>
-      
-      <!-- Disclaimer -->
-      <div class="mt-4 p-3 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
-        <p class="text-xs text-yellow-400/80">
-          ⚠️ <strong>Catatan Penting:</strong> Impact news bisa bervariasi tergantung rilis (contoh: Final GDP biasanya low impact, Advance GDP biasanya high impact). 
-          Selalu cek actual impact dari ForexFactory dan sesuaikan dengan pengalaman trading Anda.
-        </p>
+      <div v-else class="text-center py-8 text-dark-400">
+        <span class="text-4xl mb-2 block">🌍</span>
+        <p>Klik "Refresh MSI" untuk memuat Market Stability Index</p>
       </div>
     </div>
 
@@ -1486,6 +1491,8 @@
         </button>
       </div>
     </div>
+
+  
 
     <!-- Edit Modal -->
     <Teleport to="body">
@@ -1625,12 +1632,136 @@
         </div>
       </div>
     </Teleport>
+
+  <!-- Indicator Info Modal -->
+  <Teleport to="body">
+    <Transition name="modal">
+      <div
+        v-if="showIndicatorModal && selectedIndicator"
+        class="fixed inset-0 z-50 overflow-y-auto"
+        @click.self="showIndicatorModal = false"
+      >
+        <div class="fixed inset-0 bg-dark-950/90 backdrop-blur-sm"></div>
+        <div class="relative min-h-screen flex items-center justify-center p-4">
+          <div class="relative w-full max-w-2xl card p-6 bg-dark-900" @click.stop>
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-xl font-bold text-dark-100">{{ selectedIndicator.name }}</h2>
+              <button
+                @click="showIndicatorModal = false"
+                class="p-2 rounded-lg hover:bg-dark-800 text-dark-400 hover:text-dark-200 transition-colors"
+              >
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <div class="space-y-4">
+              <!-- Description -->
+              <div>
+                <p class="text-sm text-dark-300">{{ selectedIndicator.description }}</p>
+              </div>
+
+              <!-- Current Value & Score -->
+              <div class="p-4 bg-dark-800/50 rounded-lg border border-dark-700/50">
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <div class="text-xs text-dark-400 mb-1">Nilai Saat Ini</div>
+                    <div class="text-2xl font-bold text-dark-100">
+                      {{ typeof selectedIndicator.currentValue === 'number' 
+                        ? selectedIndicator.currentValue.toFixed(2) 
+                        : selectedIndicator.currentValue }}
+                      {{ selectedIndicator.name.includes('Yield') ? '%' : '' }}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-dark-400 mb-1">Score</div>
+                    <div class="text-2xl font-bold" :class="[
+                      selectedIndicator.currentScore >= 70 ? 'text-green-400' :
+                      selectedIndicator.currentScore >= 50 ? 'text-yellow-400' : 'text-red-400'
+                    ]">
+                      {{ selectedIndicator.currentScore }}/100
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-3 pt-3 border-t border-dark-700/50">
+                  <div class="text-xs text-dark-400 mb-1">Kategori</div>
+                  <div class="text-sm font-semibold text-dark-200">{{ selectedIndicator.category }}</div>
+                </div>
+              </div>
+
+              <!-- Interpretation -->
+              <div class="p-4 rounded-lg border" :class="[
+                selectedIndicator.currentScore >= 70 ? 'bg-green-500/10 border-green-500/30' :
+                selectedIndicator.currentScore >= 50 ? 'bg-yellow-500/10 border-yellow-500/30' :
+                'bg-red-500/10 border-red-500/30'
+              ]">
+                <div class="text-sm font-semibold mb-2" :class="[
+                  selectedIndicator.currentScore >= 70 ? 'text-green-400' :
+                  selectedIndicator.currentScore >= 50 ? 'text-yellow-400' : 'text-red-400'
+                ]">
+                  Interpretasi
+                </div>
+                <p class="text-sm text-dark-200">{{ selectedIndicator.interpretation }}</p>
+              </div>
+
+              <!-- Safe Ranges -->
+              <div>
+                <h3 class="text-sm font-semibold text-green-400 mb-3">🟢 Nilai Aman</h3>
+                <div class="space-y-2">
+                  <div 
+                    v-for="(range, idx) in selectedIndicator.safeRanges" 
+                    :key="idx"
+                    class="p-3 bg-green-500/5 border border-green-500/20 rounded-lg"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium text-green-300">{{ range.range }}</span>
+                      <span class="text-xs text-green-400">Score: {{ range.score }}</span>
+                    </div>
+                    <p class="text-xs text-dark-300">{{ range.description }}</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Danger Ranges -->
+              <div>
+                <h3 class="text-sm font-semibold text-red-400 mb-3">🔴 Nilai Berbahaya</h3>
+                <div class="space-y-2">
+                  <div 
+                    v-for="(range, idx) in selectedIndicator.dangerRanges" 
+                    :key="idx"
+                    class="p-3 bg-red-500/5 border border-red-500/20 rounded-lg"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-medium text-red-300">{{ range.range }}</span>
+                      <span class="text-xs text-red-400">Score: {{ range.score }}</span>
+                    </div>
+                    <p class="text-xs text-dark-300">{{ range.description }}</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Close Button -->
+              <div class="flex justify-end pt-4">
+                <button
+                  @click="showIndicatorModal = false"
+                  class="px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import api from '@/services/api'
+import api, { msiAPI } from '@/services/api'
 import dayjs from 'dayjs'
 
 // State
@@ -1670,6 +1801,15 @@ const technicalAnalysis = ref(null)
 const loadingTechnical = ref(false)
 const technicalError = ref(null)
 const tradingViewWidget = ref(null)
+
+// Prediction 4: Market Stability Index (MSI)
+const msiData = ref(null)
+const loadingMSI = ref(false)
+const msiError = ref(null)
+
+// Indicator info modal
+const showIndicatorModal = ref(false)
+const selectedIndicator = ref(null)
 
 const editForm = ref({
   date: '',
@@ -1725,6 +1865,108 @@ const filteredNews = computed(() => {
   })
 })
 
+// Computed: Technical Confidence & Override Logic
+const technicalConfidence = computed(() => {
+  if (!technicalAnalysis.value?.predictions) return null
+  
+  const allModules = []
+  let insufficientDataCount = 0
+  let dangerWithHighConfidence = false
+  const dangerModules = [] // Track which modules triggered DANGER
+  
+  // Collect all modules from all timeframes
+  Object.values(technicalAnalysis.value.predictions).forEach((timeframe, tfIndex) => {
+    const timeframeName = Object.keys(technicalAnalysis.value.predictions)[tfIndex]
+    if (timeframe?.modules) {
+      Object.values(timeframe.modules).forEach((module, modIndex) => {
+        const moduleKey = Object.keys(timeframe.modules)[modIndex]
+        allModules.push({
+          ...module,
+          timeframe: timeframeName,
+          moduleKey: moduleKey
+        })
+        if (module.status === 'insufficient_data') {
+          insufficientDataCount++
+        }
+        // Check if any DANGER module has confidence >= 70%
+        if ((module.status === 'danger' || module.status === 'extreme_shock' || 
+             module.status === 'strong_trend' || module.status === 'shock') && 
+            (module.confidence ?? 0) >= 70) {
+          dangerWithHighConfidence = true
+          dangerModules.push({
+            module: module.module || moduleKey,
+            timeframe: timeframeName,
+            status: module.status,
+            confidence: module.confidence ?? 0,
+            status_label: module.status_label
+          })
+        }
+      })
+    }
+  })
+  
+  if (allModules.length === 0) return null
+  
+  // Calculate average confidence (excluding insufficient_data)
+  const validModules = allModules.filter(m => m.status !== 'insufficient_data')
+  const avgConfidence = validModules.length > 0
+    ? Math.round(validModules.reduce((sum, m) => sum + (m.confidence ?? 0), 0) / validModules.length)
+    : 0
+  
+  // Determine final status with override rules
+  let finalStatus = technicalAnalysis.value.combined_overall?.status || 'safe'
+  let overrideReason = null
+  let eaRecommendation = null
+  const riskScore = technicalAnalysis.value.combined_overall?.risk_score || 0
+  
+  // Rule 1: If any DANGER module with confidence >= 70% → override to DANGER
+  if (dangerWithHighConfidence) {
+    finalStatus = 'danger'
+    const dangerModulesList = dangerModules.map(m => `${m.module} (${m.timeframe})`).join(', ')
+    overrideReason = `Modul DANGER dengan confidence ≥ 70% terdeteksi: ${dangerModulesList}`
+    eaRecommendation = `EA DANGER | Risk Score: ${riskScore}/100 | Kondisi market berisiko tinggi untuk EA Grid. Disarankan nonaktifkan EA atau gunakan mode konservatif.`
+  }
+  // Rule 2: If all SAFE and no Insufficient Data → SAFE
+  else if (allModules.every(m => m.status === 'safe' || m.status === 'low_risk') && insufficientDataCount === 0) {
+    finalStatus = 'safe'
+    eaRecommendation = `EA SAFE | Risk Score: ${riskScore}/100 | Kondisi market relatif aman untuk EA Grid.`
+  }
+  // Rule 3: If mixed & many Insufficient Data → CAUTION
+  else if (insufficientDataCount > allModules.length * 0.5) {
+    finalStatus = 'caution'
+    overrideReason = 'Keputusan teknikal kurang kuat, sebaiknya ikuti Prediksi 1 & 2.'
+    eaRecommendation = `EA CAUTION | Risk Score: ${riskScore}/100 | Data teknikal kurang lengkap. Gunakan mode konservatif atau nonaktifkan EA.`
+  }
+  // Default: Generate recommendation based on final status
+  else {
+    // If status changed due to override, generate new recommendation
+    if (finalStatus !== technicalAnalysis.value.combined_overall?.status) {
+      if (finalStatus === 'danger') {
+        eaRecommendation = `EA DANGER | Risk Score: ${riskScore}/100 | Kondisi market berisiko tinggi untuk EA Grid. Disarankan nonaktifkan EA atau gunakan mode konservatif.`
+      } else if (finalStatus === 'caution') {
+        eaRecommendation = `EA CAUTION | Risk Score: ${riskScore}/100 | Kondisi market perlu perhatian. Gunakan mode konservatif.`
+      } else {
+        eaRecommendation = `EA SAFE | Risk Score: ${riskScore}/100 | Kondisi market relatif aman untuk EA Grid.`
+      }
+    } else {
+      // Use original recommendation if status not changed
+      eaRecommendation = technicalAnalysis.value.combined_overall?.recommendation || ''
+    }
+  }
+  
+  return {
+    confidence: avgConfidence,
+    finalStatus,
+    overrideReason,
+    insufficientDataCount,
+    totalModules: allModules.length,
+    eaRecommendation,
+    dangerModules: dangerModules, // List of modules that triggered DANGER override
+    originalStatus: technicalAnalysis.value.combined_overall?.status || 'safe',
+    originalRiskScore: riskScore
+  }
+})
+
 // Methods
 const fetchNews = async () => {
   loading.value = true
@@ -1762,6 +2004,9 @@ const fetchPredictions = async () => {
       forexfactoryDayPrediction.value = response.data.prediction_1_forexfactory.day_prediction || null
       forexfactorySafeWindows.value = response.data.prediction_1_forexfactory.safe_windows || []
       forexfactoryDangerWindows.value = response.data.prediction_1_forexfactory.danger_windows || []
+      
+      // Debug: Check AI data
+      console.log('Prediction 1 Day Prediction:', forexfactoryDayPrediction.value)
     }
     
     // Prediction 2: Historical Marking Based
@@ -1770,12 +2015,166 @@ const fetchPredictions = async () => {
       historicalDayPrediction.value = response.data.prediction_2_historical.day_prediction || null
       historicalSafeWindows.value = response.data.prediction_2_historical.safe_windows || []
       historicalDangerWindows.value = response.data.prediction_2_historical.danger_windows || []
+      
+      // Debug: Check AI data
+      console.log('Prediction 2 Day Prediction:', historicalDayPrediction.value)
     }
   } catch (error) {
     console.error('Failed to fetch predictions:', error)
   } finally {
     loadingPredictions.value = false
   }
+}
+
+// Fetch MSI (Market Stability Index)
+const fetchMSI = async () => {
+  loadingMSI.value = true
+  msiError.value = null
+  
+  try {
+    const response = await msiAPI.getLive()
+    msiData.value = response.data
+  } catch (error) {
+    console.error('Failed to fetch MSI:', error)
+    msiError.value = error.response?.data?.message || error.message || 'Gagal mengambil Market Stability Index'
+  } finally {
+    loadingMSI.value = false
+  }
+}
+
+// Get indicator information based on scoring rules
+const getIndicatorInfo = (indicator, value, score) => {
+  const info = {
+    name: '',
+    description: '',
+    currentValue: value,
+    currentScore: score,
+    category: '',
+    safeRanges: [],
+    dangerRanges: [],
+    interpretation: ''
+  }
+
+  switch (indicator) {
+    case 'dxy':
+      info.name = 'DXY (Dollar Index)'
+      info.description = 'Indeks Dolar AS mengukur kekuatan USD terhadap sekumpulan mata uang utama'
+      info.category = score >= 70 ? '🟢 Sideways/Stabil' : score >= 50 ? '🟡 Moderate Movement' : '🔴 Strong Trend'
+      info.safeRanges = [
+        { range: '95-105', description: 'DXY dalam range normal, dekat tengah (100)', score: 80 },
+        { range: '90-110', description: 'DXY dalam range normal', score: 50 }
+      ]
+      info.dangerRanges = [
+        { range: '< 90 atau > 110', description: 'DXY di luar range normal, menunjukkan trend kuat', score: 20 }
+      ]
+      info.interpretation = score >= 70 
+        ? 'DXY bergerak sideways, kondisi stabil untuk EA Grid'
+        : score >= 50
+        ? 'DXY menunjukkan pergerakan moderat, perlu perhatian'
+        : 'DXY trending kuat, berbahaya untuk EA Grid'
+      break
+
+    case 'vix':
+      info.name = 'VIX (Volatility Index)'
+      info.description = 'Indeks volatilitas pasar saham AS (CBOE Volatility Index)'
+      info.category = score >= 70 ? '🟢 Low Volatility' : score >= 50 ? '🟡 Moderate Volatility' : '🔴 High Volatility'
+      info.safeRanges = [
+        { range: '< 15', description: 'VIX rendah, volatilitas rendah, kondisi stabil', score: 90 },
+        { range: '15-20', description: 'VIX sedang, volatilitas moderat', score: 70 }
+      ]
+      info.dangerRanges = [
+        { range: '20-25', description: 'VIX tinggi, volatilitas tinggi', score: 40 },
+        { range: '> 25', description: 'VIX sangat tinggi, volatilitas ekstrem', score: 10 }
+      ]
+      info.interpretation = score >= 70
+        ? 'VIX rendah, pasar stabil, aman untuk EA Grid'
+        : score >= 50
+        ? 'VIX sedang, perlu perhatian'
+        : 'VIX tinggi, pasar volatile, berbahaya untuk EA Grid'
+      break
+
+    case 'gvz':
+      info.name = 'GVZ (Gold Volatility Index)'
+      info.description = 'Indeks volatilitas emas, mengukur ekspektasi volatilitas harga emas'
+      info.category = score >= 70 ? '🟢 Low Volatility' : score >= 50 ? '🟡 Moderate Volatility' : '🔴 High Volatility'
+      info.safeRanges = [
+        { range: '< 12', description: 'GVZ rendah, emas sangat stabil, sangat aman untuk EA Grid', score: 90 },
+        { range: '12-15', description: 'GVZ sedang, emas stabil', score: 70 }
+      ]
+      info.dangerRanges = [
+        { range: '15-18', description: 'GVZ tinggi, volatilitas emas meningkat', score: 45 },
+        { range: '>= 18', description: 'GVZ sangat tinggi, emas rawan trending kuat', score: 20 }
+      ]
+      info.interpretation = score >= 70
+        ? 'GVZ rendah, emas stabil, aman untuk EA Grid'
+        : score >= 50
+        ? 'GVZ sedang, perlu perhatian'
+        : 'GVZ tinggi, emas volatile, berbahaya untuk EA Grid'
+      break
+
+    case 'yield':
+      info.name = 'US 10-Year Treasury Yield'
+      info.description = 'Imbal hasil obligasi pemerintah AS 10 tahun, indikator sentimen pasar'
+      info.category = score >= 60 ? '🟢 Stable' : score >= 50 ? '🟡 Moderate' : '🔴 Volatile'
+      info.safeRanges = [
+        { range: '2.5-4.5%', description: 'Yield dalam range normal, dekat tengah (3.5%)', score: 70 },
+        { range: '2.0-5.0%', description: 'Yield dalam range normal', score: 50 }
+      ]
+      info.dangerRanges = [
+        { range: '< 2.0% atau > 5.0%', description: 'Yield di luar range normal, menunjukkan instabilitas', score: 20 }
+      ]
+      info.interpretation = score >= 60
+        ? 'Yield stabil, kondisi pasar stabil'
+        : score >= 50
+        ? 'Yield menunjukkan pergerakan moderat'
+        : 'Yield volatile, kondisi pasar tidak stabil'
+      break
+
+    case 'spx':
+      info.name = 'S&P500 Futures (ES)'
+      info.description = 'Futures S&P500, indikator sentimen pasar saham global'
+      info.category = score >= 70 ? '🟢 Sideways' : score >= 50 ? '🟡 Stable Trend' : '🔴 Volatile'
+      info.safeRanges = [
+        { range: 'Sideways (< 0.5% change)', description: 'ES bergerak sideways, kondisi stabil', score: 80 },
+        { range: 'Uptrend stabil (0.5-2%)', description: 'ES uptrend stabil, kondisi baik', score: 60 }
+      ]
+      info.dangerRanges = [
+        { range: 'Downtrend stabil (-0.5% to -2%)', description: 'ES downtrend, perlu perhatian', score: 40 },
+        { range: 'Volatile (> 2% atau < -2%)', description: 'ES volatile, pergerakan besar', score: 20 }
+      ]
+      info.interpretation = score >= 70
+        ? 'ES sideways, kondisi stabil untuk EA Grid'
+        : score >= 50
+        ? 'ES menunjukkan trend stabil'
+        : 'ES volatile, berbahaya untuk EA Grid'
+      break
+
+    case 'correlation':
+      info.name = 'Cross-Pair Correlation'
+      info.description = 'Korelasi rata-rata antara pasangan mata uang (XAUUSD, EURUSD, GBPUSD, USDJPY)'
+      info.category = score >= 70 ? '🟢 Low Correlation' : score >= 50 ? '🟡 Moderate Correlation' : '🔴 High Correlation'
+      info.safeRanges = [
+        { range: '|corr| < 0.3', description: 'Korelasi rendah, pasar tidak seragam (CHOPPY), aman untuk EA grid', score: 90 },
+        { range: '0.3-0.6', description: 'Korelasi sedang', score: 60 }
+      ]
+      info.dangerRanges = [
+        { range: '|corr| > 0.6', description: 'Korelasi tinggi, pasar bergerak searah (TRENDING), berbahaya untuk EA grid', score: 30 }
+      ]
+      info.interpretation = score >= 70
+        ? 'Korelasi rendah, pasar choppy, aman untuk EA Grid'
+        : score >= 50
+        ? 'Korelasi sedang, perlu perhatian'
+        : 'Korelasi tinggi, pasar trending, berbahaya untuk EA Grid'
+      break
+  }
+
+  return info
+}
+
+// Open indicator info modal
+const openIndicatorInfo = (indicator, value, score) => {
+  selectedIndicator.value = getIndicatorInfo(indicator, value, score)
+  showIndicatorModal.value = true
 }
 
 const fetchNotableEvents = async () => {
@@ -1890,9 +2289,9 @@ const getOHLCFromTradingView = async () => {
   const oneHour = 60 * 60 * 1000
   const oneMinute = 60 * 1000
   
-  // Generate H1 data (last 30 hours)
+  // Generate H1 data (last 50 hours - enough for all modules)
   const h1Data = []
-  for (let i = 30; i >= 0; i--) {
+  for (let i = 50; i >= 0; i--) {
     const time = now - (i * oneHour)
     const open = basePrice + (Math.random() - 0.5) * 10
     const high = open + Math.random() * 5
@@ -1907,9 +2306,9 @@ const getOHLCFromTradingView = async () => {
     })
   }
   
-  // Generate H4 data (last 20 periods)
+  // Generate H4 data (last 30 periods - enough for all modules)
   const h4Data = []
-  for (let i = 20; i >= 0; i--) {
+  for (let i = 30; i >= 0; i--) {
     const time = now - (i * oneHour * 4)
     const open = basePrice + (Math.random() - 0.5) * 15
     const high = open + Math.random() * 8
@@ -1924,9 +2323,9 @@ const getOHLCFromTradingView = async () => {
     })
   }
   
-  // Generate 15m data (last 30 periods)
+  // Generate 15m data (last 50 periods - enough for all modules)
   const m15Data = []
-  for (let i = 30; i >= 0; i--) {
+  for (let i = 50; i >= 0; i--) {
     const time = now - (i * oneMinute * 15)
     const open = basePrice + (Math.random() - 0.5) * 8
     const high = open + Math.random() * 3
@@ -2244,9 +2643,13 @@ onMounted(() => {
   fetchEaRecommendation()
   fetchPredictions()
   fetchNotableEvents()
+  fetchMSI()
   
   // Refresh EA recommendation every minute
   setInterval(fetchEaRecommendation, 60000)
+  
+  // Refresh MSI every 5 minutes
+  setInterval(fetchMSI, 300000)
   
   // Auto-fetch technical analysis every 5 minutes if available
   // setInterval(() => {
@@ -2256,4 +2659,28 @@ onMounted(() => {
   // }, 300000)
 })
 </script>
+
+<style scoped>
+/* Modal transition */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+
+.modal-enter-active .card,
+.modal-leave-active .card {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.modal-enter-from .card,
+.modal-leave-to .card {
+  transform: scale(0.95);
+  opacity: 0;
+}
+</style>
 
