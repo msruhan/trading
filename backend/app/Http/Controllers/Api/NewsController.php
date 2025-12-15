@@ -793,9 +793,13 @@ class NewsController extends Controller
         // Perform technical analysis for each timeframe separately
         $predictions = [];
         
-        // M15 Analysis
+        // M15 Analysis - Always include H1 and H4 for context
         if (!empty($ohlcData['15m'])) {
-            $m15Data = ['15m' => $ohlcData['15m'], 'H1' => $ohlcData['H1'] ?? [], 'H4' => $ohlcData['H4'] ?? []];
+            $m15Data = [
+                '15m' => $ohlcData['15m'], 
+                'H1' => $ohlcData['H1'] ?? [], 
+                'H4' => $ohlcData['H4'] ?? []
+            ];
             $m15Analysis = $this->technicalService->analyzeForTimeframe($m15Data, '15m');
             $predictions['M15'] = [
                 'timeframe' => 'M15',
@@ -805,9 +809,12 @@ class NewsController extends Controller
             ];
         }
         
-        // H1 Analysis
+        // H1 Analysis - Always include H4 for context
         if (!empty($ohlcData['H1'])) {
-            $h1Data = ['H1' => $ohlcData['H1'], 'H4' => $ohlcData['H4'] ?? []];
+            $h1Data = [
+                'H1' => $ohlcData['H1'], 
+                'H4' => $ohlcData['H4'] ?? []
+            ];
             $h1Analysis = $this->technicalService->analyzeForTimeframe($h1Data, 'H1');
             $predictions['H1'] = [
                 'timeframe' => 'H1',
@@ -817,9 +824,12 @@ class NewsController extends Controller
             ];
         }
         
-        // H4 Analysis
+        // H4 Analysis - Include H1 for modules that need it
         if (!empty($ohlcData['H4'])) {
-            $h4Data = ['H4' => $ohlcData['H4']];
+            $h4Data = [
+                'H4' => $ohlcData['H4'],
+                'H1' => $ohlcData['H1'] ?? [] // Include H1 for modules that need it
+            ];
             $h4Analysis = $this->technicalService->analyzeForTimeframe($h4Data, 'H4');
             $predictions['H4'] = [
                 'timeframe' => 'H4',

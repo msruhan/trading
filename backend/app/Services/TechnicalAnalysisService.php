@@ -231,8 +231,13 @@ class TechnicalAnalysisService
         $h1 = $this->getTimeframeData($ohlcData, 'H1');
         $h4 = $this->getTimeframeData($ohlcData, 'H4');
         
+        // Fallback to H4 if H1 is not available
         if (empty($h1) || count($h1) < 20) {
-            return $this->defaultModuleResult('breakout_probability', 'insufficient_data');
+            if (!empty($h4) && count($h4) >= 20) {
+                $h1 = $h4; // Use H4 as H1 substitute
+            } else {
+                return $this->defaultModuleResult('breakout_probability', 'insufficient_data');
+            }
         }
         
         // Calculate H1 range
@@ -340,8 +345,13 @@ class TechnicalAnalysisService
         $h1 = $this->getTimeframeData($ohlcData, 'H1');
         $h4 = $this->getTimeframeData($ohlcData, 'H4');
         
+        // Fallback to H4 if H1 is not available
         if (empty($h1) || count($h1) < 10) {
-            return $this->defaultModuleResult('liquidity_map', 'insufficient_data');
+            if (!empty($h4) && count($h4) >= 10) {
+                $h1 = $h4; // Use H4 as H1 substitute
+            } else {
+                return $this->defaultModuleResult('liquidity_map', 'insufficient_data');
+            }
         }
         
         $currentPrice = end($h1)['close'];
@@ -727,8 +737,14 @@ class TechnicalAnalysisService
     {
         $h1 = $this->getTimeframeData($ohlcData, 'H1');
         
+        // Fallback to H4 if H1 is not available
         if (empty($h1) || count($h1) < 20) {
-            return $this->defaultModuleResult('atr_shock', 'insufficient_data');
+            $h4 = $this->getTimeframeData($ohlcData, 'H4');
+            if (!empty($h4) && count($h4) >= 20) {
+                $h1 = $h4; // Use H4 as H1 substitute
+            } else {
+                return $this->defaultModuleResult('atr_shock', 'insufficient_data');
+            }
         }
         
         // Calculate ATR(14)
@@ -926,8 +942,14 @@ class TechnicalAnalysisService
     {
         $h1 = $this->getTimeframeData($ohlcData, 'H1');
         
+        // Fallback to H4 if H1 is not available
         if (empty($h1) || count($h1) < 20) {
-            return $this->defaultModuleResult('market_regime', 'insufficient_data');
+            $h4 = $this->getTimeframeData($ohlcData, 'H4');
+            if (!empty($h4) && count($h4) >= 20) {
+                $h1 = $h4; // Use H4 as H1 substitute
+            } else {
+                return $this->defaultModuleResult('market_regime', 'insufficient_data');
+            }
         }
         
         // Calculate indicators
@@ -1259,6 +1281,30 @@ class TechnicalAnalysisService
         }
         
         $modifiedData = [$primaryTimeframe => $primaryData];
+        
+        // Always include H1 if available (required for this module)
+        if (isset($ohlcData['H1']) && !empty($ohlcData['H1'])) {
+            $modifiedData['H1'] = $ohlcData['H1'];
+        } elseif ($primaryTimeframe === '15m' && count($primaryData) >= 20) {
+            // For M15, if we have enough data, use it as H1 substitute
+            // Aggregate 4 M15 candles = 1 H1 candle
+            $aggregatedH1 = [];
+            for ($i = 0; $i < count($primaryData) - 3; $i += 4) {
+                $group = array_slice($primaryData, $i, 4);
+                if (count($group) === 4) {
+                    $aggregatedH1[] = [
+                        'open' => $group[0]['open'],
+                        'high' => max(array_column($group, 'high')),
+                        'low' => min(array_column($group, 'low')),
+                        'close' => $group[3]['close'],
+                    ];
+                }
+            }
+            if (count($aggregatedH1) >= 20) {
+                $modifiedData['H1'] = $aggregatedH1;
+            }
+        }
+        
         // For H1, can use H4 for comparison
         if ($primaryTimeframe === 'H1' && isset($ohlcData['H4'])) {
             $modifiedData['H4'] = $ohlcData['H4'];
@@ -1275,6 +1321,29 @@ class TechnicalAnalysisService
         }
         
         $modifiedData = [$primaryTimeframe => $primaryData];
+        
+        // Always include H1 if available (required for this module)
+        if (isset($ohlcData['H1']) && !empty($ohlcData['H1'])) {
+            $modifiedData['H1'] = $ohlcData['H1'];
+        } elseif ($primaryTimeframe === '15m' && count($primaryData) >= 10) {
+            // For M15, aggregate to H1 if we have enough data
+            $aggregatedH1 = [];
+            for ($i = 0; $i < count($primaryData) - 3; $i += 4) {
+                $group = array_slice($primaryData, $i, 4);
+                if (count($group) === 4) {
+                    $aggregatedH1[] = [
+                        'open' => $group[0]['open'],
+                        'high' => max(array_column($group, 'high')),
+                        'low' => min(array_column($group, 'low')),
+                        'close' => $group[3]['close'],
+                    ];
+                }
+            }
+            if (count($aggregatedH1) >= 10) {
+                $modifiedData['H1'] = $aggregatedH1;
+            }
+        }
+        
         if ($primaryTimeframe === 'H1' && isset($ohlcData['H4'])) {
             $modifiedData['H4'] = $ohlcData['H4'];
         }
@@ -1305,6 +1374,32 @@ class TechnicalAnalysisService
         }
         
         $modifiedData = [$primaryTimeframe => $primaryData];
+        
+        // Always include H1 if available (required for this module)
+        if (isset($ohlcData['H1']) && !empty($ohlcData['H1'])) {
+            $modifiedData['H1'] = $ohlcData['H1'];
+        } elseif ($primaryTimeframe === '15m' && count($primaryData) >= 80) {
+            // For M15, aggregate to H1 if we have enough data (80 M15 = 20 H1)
+            $aggregatedH1 = [];
+            for ($i = 0; $i < count($primaryData) - 3; $i += 4) {
+                $group = array_slice($primaryData, $i, 4);
+                if (count($group) === 4) {
+                    $aggregatedH1[] = [
+                        'open' => $group[0]['open'],
+                        'high' => max(array_column($group, 'high')),
+                        'low' => min(array_column($group, 'low')),
+                        'close' => $group[3]['close'],
+                    ];
+                }
+            }
+            if (count($aggregatedH1) >= 20) {
+                $modifiedData['H1'] = $aggregatedH1;
+            }
+        } elseif ($primaryTimeframe === 'H4' && count($primaryData) >= 20) {
+            // For H4, can use it directly if we have enough data
+            $modifiedData['H1'] = $primaryData;
+        }
+        
         return $this->detectATRShock($modifiedData);
     }
     
@@ -1331,6 +1426,32 @@ class TechnicalAnalysisService
         }
         
         $modifiedData = [$primaryTimeframe => $primaryData];
+        
+        // Always include H1 if available (required for this module)
+        if (isset($ohlcData['H1']) && !empty($ohlcData['H1'])) {
+            $modifiedData['H1'] = $ohlcData['H1'];
+        } elseif ($primaryTimeframe === '15m' && count($primaryData) >= 80) {
+            // For M15, aggregate to H1 if we have enough data (80 M15 = 20 H1)
+            $aggregatedH1 = [];
+            for ($i = 0; $i < count($primaryData) - 3; $i += 4) {
+                $group = array_slice($primaryData, $i, 4);
+                if (count($group) === 4) {
+                    $aggregatedH1[] = [
+                        'open' => $group[0]['open'],
+                        'high' => max(array_column($group, 'high')),
+                        'low' => min(array_column($group, 'low')),
+                        'close' => $group[3]['close'],
+                    ];
+                }
+            }
+            if (count($aggregatedH1) >= 20) {
+                $modifiedData['H1'] = $aggregatedH1;
+            }
+        } elseif ($primaryTimeframe === 'H4' && count($primaryData) >= 20) {
+            // For H4, can use it directly if we have enough data
+            $modifiedData['H1'] = $primaryData;
+        }
+        
         return $this->classifyMarketRegime($modifiedData);
     }
     

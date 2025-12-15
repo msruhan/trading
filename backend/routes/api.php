@@ -6,9 +6,12 @@ use App\Http\Controllers\Api\ChartAnalysisController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EABridgeController;
 use App\Http\Controllers\Api\EACommandController;
+use App\Http\Controllers\Api\InsightsController;
 use App\Http\Controllers\Api\ManualEntryController;
+use App\Http\Controllers\Api\MSIController;
 use App\Http\Controllers\Api\NewsController;
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\TodayAnalysisController;
 use App\Http\Controllers\Api\TradeController;
 use Illuminate\Support\Facades\Route;
 
@@ -115,6 +118,21 @@ Route::prefix('v1')->group(function () {
         Route::get('/chart-analyses', [ChartAnalysisController::class, 'index']);
         Route::get('/chart-analyses/{symbol}/{interval}', [ChartAnalysisController::class, 'getBySymbol']);
         Route::apiResource('chart-analyses', ChartAnalysisController::class)->except(['index']);
+
+        // MSI (Market Stability Index)
+        Route::prefix('msi')->group(function () {
+            Route::get('/live', [MSIController::class, 'live']);
+        });
+
+        // Insights
+        Route::prefix('insights')->group(function () {
+            Route::get('/', [InsightsController::class, 'index']);
+        });
+
+        // Today Analysis
+        Route::prefix('today-analysis')->group(function () {
+            Route::get('/', [TodayAnalysisController::class, 'index']);
+        });
     });
 });
 
