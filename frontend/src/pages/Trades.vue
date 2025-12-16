@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, reactive } from 'vue'
 import { Teleport, Transition } from 'vue'
 import { useRouter } from 'vue-router'
-import { tradesAPI, eaCommandsAPI } from '@/services/api'
+import { tradesAPI, eaCommandsAPI, accountsAPI } from '@/services/api'
 import { useAccountsStore } from '@/stores/accounts'
 import TradeTable from '@/components/common/TradeTable.vue'
 import {
@@ -15,6 +15,7 @@ import {
   PlayIcon,
   PauseIcon,
   ClockIcon,
+  ArrowPathIcon,
 } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
@@ -44,6 +45,10 @@ const sendingCommand = ref(false)
 const targetMagicBuy = ref('') // Magic number for BUY orders of EA to control
 const targetMagicSell = ref('') // Magic number for SELL orders of EA to control
 const interceptAllTrading = ref(false) // Intercept ALL trading on this account
+const tradingMode = ref(0) // Trading Mode: 0=Auto, 1=Buy Only, 2=Sell Only
+const syncing = ref(false)
+const eaInfo = ref(null)
+const loadingEAInfo = ref(false)
 
 onMounted(async () => {
   try {
@@ -294,6 +299,106 @@ const sendScheduleCommand = async () => {
     sendingCommand.value = false
   }
 }
+
+const fetchEAInfo = async () => {
+  if (!filters.account_id) {
+    eaInfo.value = null
+    return
+  }
+
+  loadingEAInfo.value = true
+  try {
+    const response = await accountsAPI.getEAInfo(filters.account_id)
+    eaInfo.value = response.data.ea_info
+  } catch (error) {
+    console.error('Failed to fetch EA info:', error)
+    eaInfo.value = null
+  } finally {
+    loadingEAInfo.value = false
+  }
+}
+
+const triggerSync = async () => {
+  if (!filters.account_id) {
+    alert('Please select an account first')
+    return
+  }
+
+  syncing.value = true
+  try {
+    await accountsAPI.triggerSync(filters.account_id)
+    // Wait a bit then fetch EA info
+    setTimeout(() => {
+      fetchEAInfo()
+    }, 2000)
+    alert('Sync request sent to EA. The EA will sync on the next check.')
+  } catch (error) {
+    console.error('Failed to trigger sync:', error)
+    alert('Failed to trigger sync. Please try again.')
+  } finally {
+    syncing.value = false
+  }
+}
+
+const sendTradingModeCommand = async () => {
+  if (!filters.account_id) {
+    alert('Please select an account first')
+    return
+  }
+
+  sendingCommand.value = true
+  try {
+    await eaCommandsAPI.create(filters.account_id, {
+      command: 'set_trading_mode',
+      params: {
+        trading_mode: tradingMode.value,
+      },
+    })
+    alert(`Trading mode set to ${getTradingModeLabel(tradingMode.value)}. The EA will process it on the next sync.`)
+    // Refresh EA info after a delay
+    setTimeout(() => {
+      fetchEAInfo()
+    }, 2000)
+  } catch (error) {
+    console.error('Failed to send trading mode command:', error)
+    alert('Failed to send trading mode command. Please try again.')
+  } finally {
+    sendingCommand.value = false
+  }
+}
+
+const getTradingModeLabel = (mode) => {
+  switch (mode) {
+    case 1:
+      return 'Buy Only'
+    case 2:
+      return 'Sell Only'
+    default:
+      return 'Auto'
+  }
+}
+
+const getMarketRegimeClass = (regime) => {
+  switch (regime) {
+    case 'BULLISH':
+      return 'text-green-400'
+    case 'BEARISH':
+      return 'text-red-400'
+    case 'SIDEWAYS':
+      return 'text-yellow-400'
+    default:
+      return 'text-gray-400'
+  }
+}
+
+// Watch for account filter changes
+watch(() => filters.account_id, (newAccountId) => {
+  if (newAccountId) {
+    fetchEAInfo()
+  } else {
+    eaInfo.value = null
+  }
+})
 </script>
 
 <template>
@@ -323,101 +428,185 @@ const sendScheduleCommand = async () => {
     </div>
 
     <!-- EA Control Panel -->
-    <div class="card p-4 mb-4">
-      <h3 class="text-lg font-semibold text-dark-200 mb-4">EA Trading Control</h3>
-      
-      <!-- Intercept All Trading Checkbox -->
-      <div class="mb-4">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input
-            v-model="interceptAllTrading"
-            type="checkbox"
-            class="w-4 h-4 rounded border-dark-600 bg-dark-800 text-primary-500 focus:ring-primary-500"
-          />
-          <span class="text-sm font-medium text-dark-300">
-            Intercept All Trading
-          </span>
-        </label>
-        <p class="text-xs text-dark-500 mt-1 ml-6">
-          If checked, will intercept ALL trading on this account regardless of magic numbers. Magic Buy/Sell inputs will be ignored.
+    <div class="card p-6 mb-4">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold text-dark-200">EA Trading Control</h3>
+        <button
+          class="btn btn-secondary flex items-center gap-2"
+          :disabled="syncing || loadingEAInfo || !filters.account_id"
+          @click="triggerSync"
+        >
+          <ArrowPathIcon class="w-4 h-4" :class="{ 'animate-spin': syncing }" />
+          {{ syncing ? 'Syncing...' : 'Sync' }}
+        </button>
+      </div>
+
+      <div v-if="!filters.account_id" class="text-center py-8">
+        <p class="text-sm text-dark-500">
+          ⚠️ Please select an account from the filters below to enable EA controls
         </p>
       </div>
 
-      <!-- Magic Buy and Sell Input -->
-      <div class="mb-4" v-if="!interceptAllTrading">
-        <label class="block text-sm font-medium text-dark-300 mb-2">
-          Target Magic Numbers (Optional)
-        </label>
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-xs text-dark-400 mb-1">Magic BUY</label>
-            <input
-              v-model="targetMagicBuy"
-              type="number"
-              min="0"
-              placeholder="Enter magic BUY (0 = all)"
-              class="input w-full"
-            />
+      <div v-else>
+        <!-- EA Information Display -->
+        <div v-if="eaInfo || loadingEAInfo" class="mb-6 p-4 bg-dark-800 rounded-lg border border-dark-700">
+          <h4 class="text-sm font-semibold text-dark-300 mb-3">EA Information</h4>
+          <div v-if="loadingEAInfo" class="text-center py-4">
+            <ArrowPathIcon class="w-5 h-5 animate-spin mx-auto text-primary-500" />
+            <p class="text-xs text-dark-500 mt-2">Loading EA information...</p>
           </div>
-          <div>
-            <label class="block text-xs text-dark-400 mb-1">Magic SELL</label>
-            <input
-              v-model="targetMagicSell"
-              type="number"
-              min="0"
-              placeholder="Enter magic SELL (0 = all)"
-              class="input w-full"
-            />
+          <div v-else-if="eaInfo" class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Magic Buy</p>
+              <p class="text-dark-200 font-medium">{{ eaInfo.magic_buy ?? 'N/A' }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Magic Sell</p>
+              <p class="text-dark-200 font-medium">{{ eaInfo.magic_sell ?? 'N/A' }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Trading Mode</p>
+              <p class="text-dark-200 font-medium">{{ getTradingModeLabel(eaInfo.trading_mode ?? 0) }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Market Regime</p>
+              <p :class="['font-medium', getMarketRegimeClass(eaInfo.market_regime?.regime ?? 'UNKNOWN')]">
+                {{ eaInfo.market_regime?.regime ?? 'UNKNOWN' }}
+              </p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">ADX Current</p>
+              <p class="text-dark-200 font-medium">{{ eaInfo.adx_current ?? 'N/A' }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Open Positions</p>
+              <p class="text-dark-200 font-medium">{{ eaInfo.open_positions?.total ?? 0 }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Intercepted Buy</p>
+              <p class="text-dark-200 font-medium">{{ eaInfo.open_positions?.intercepted_buy ?? 0 }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-dark-500 mb-1">Intercepted Sell</p>
+              <p class="text-dark-200 font-medium">{{ eaInfo.open_positions?.intercepted_sell ?? 0 }}</p>
+            </div>
+            <div v-if="eaInfo.last_sync_at" class="col-span-full">
+              <p class="text-xs text-dark-500">Last Sync: {{ new Date(eaInfo.last_sync_at).toLocaleString() }}</p>
+            </div>
           </div>
         </div>
-        <p class="text-xs text-dark-500 mt-2">
-          Leave empty or 0 to control all EAs. Enter specific magic numbers for BUY and SELL orders (e.g., Robot Grid uses separate magic for buy and sell).
+
+        <!-- Trading Mode Selection -->
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-dark-300 mb-2">
+            Trading Mode
+          </label>
+          <div class="flex items-center gap-4">
+            <select
+              v-model="tradingMode"
+              class="input flex-1"
+              @change="sendTradingModeCommand"
+            >
+              <option :value="0">Auto (based on EMA200+ADX)</option>
+              <option :value="1">Buy Only</option>
+              <option :value="2">Sell Only</option>
+            </select>
+          </div>
+          <p class="text-xs text-dark-500 mt-1">
+            Auto: Blocks SELL when BULLISH, blocks BUY when BEARISH. Buy Only: Only allows BUY orders. Sell Only: Only allows SELL orders.
+          </p>
+        </div>
+
+        <!-- Intercept All Trading Checkbox -->
+        <div class="mb-4">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              v-model="interceptAllTrading"
+              type="checkbox"
+              class="w-4 h-4 rounded border-dark-600 bg-dark-800 text-primary-500 focus:ring-primary-500"
+            />
+            <span class="text-sm font-medium text-dark-300">
+              Intercept All Trading
+            </span>
+          </label>
+          <p class="text-xs text-dark-500 mt-1 ml-6">
+            If checked, will intercept ALL trading on this account regardless of magic numbers. Magic Buy/Sell inputs will be ignored.
+          </p>
+        </div>
+
+        <!-- Magic Buy and Sell Input -->
+        <div class="mb-4" v-if="!interceptAllTrading">
+          <label class="block text-sm font-medium text-dark-300 mb-2">
+            Target Magic Numbers (Optional)
+          </label>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-dark-400 mb-1">Magic BUY</label>
+              <input
+                v-model="targetMagicBuy"
+                type="number"
+                min="0"
+                placeholder="Enter magic BUY (0 = all)"
+                class="input w-full"
+              />
+            </div>
+            <div>
+              <label class="block text-xs text-dark-400 mb-1">Magic SELL</label>
+              <input
+                v-model="targetMagicSell"
+                type="number"
+                min="0"
+                placeholder="Enter magic SELL (0 = all)"
+                class="input w-full"
+              />
+            </div>
+          </div>
+          <p class="text-xs text-dark-500 mt-2">
+            Leave empty or 0 to control all EAs. Enter specific magic numbers for BUY and SELL orders (e.g., Robot Grid uses separate magic for buy and sell).
+          </p>
+        </div>
+        
+        <div class="flex flex-wrap gap-3">
+          <button
+            class="btn btn-danger flex items-center gap-2"
+            :disabled="sendingCommand || !filters.account_id"
+            @click="sendCommand('close_all')"
+          >
+            <StopIcon class="w-4 h-4" />
+            Close All Trades
+          </button>
+          <button
+            class="btn btn-warning flex items-center gap-2"
+            :disabled="sendingCommand || !filters.account_id"
+            @click="sendCommand('pause')"
+          >
+            <PauseIcon class="w-4 h-4" />
+            Pause Trading
+          </button>
+          <button
+            class="btn btn-success flex items-center gap-2"
+            :disabled="sendingCommand || !filters.account_id"
+            @click="sendCommand('resume')"
+          >
+            <PlayIcon class="w-4 h-4" />
+            Resume Trading
+          </button>
+          <button
+            class="btn btn-secondary flex items-center gap-2"
+            :disabled="sendingCommand || !filters.account_id"
+            @click="openScheduleModal"
+          >
+            <ClockIcon class="w-4 h-4" />
+            Set Schedule
+          </button>
+        </div>
+        <p v-if="interceptAllTrading" class="text-xs text-primary-400 mt-2">
+          ℹ️ Intercepting ALL trading on this account (Magic Buy/Sell ignored)
+        </p>
+        <p v-else-if="(targetMagicBuy && parseInt(targetMagicBuy) > 0) || (targetMagicSell && parseInt(targetMagicSell) > 0)" class="text-xs text-primary-400 mt-2">
+          ℹ️ Controlling EA with Magic BUY: {{ targetMagicBuy || '0 (all)' }}, Magic SELL: {{ targetMagicSell || '0 (all)' }}
         </p>
       </div>
-      
-      <div class="flex flex-wrap gap-3">
-        <button
-          class="btn btn-danger flex items-center gap-2"
-          :disabled="sendingCommand || !filters.account_id"
-          @click="sendCommand('close_all')"
-        >
-          <StopIcon class="w-4 h-4" />
-          Close All Trades
-        </button>
-        <button
-          class="btn btn-warning flex items-center gap-2"
-          :disabled="sendingCommand || !filters.account_id"
-          @click="sendCommand('pause')"
-        >
-          <PauseIcon class="w-4 h-4" />
-          Pause Trading
-        </button>
-        <button
-          class="btn btn-success flex items-center gap-2"
-          :disabled="sendingCommand || !filters.account_id"
-          @click="sendCommand('resume')"
-        >
-          <PlayIcon class="w-4 h-4" />
-          Resume Trading
-        </button>
-        <button
-          class="btn btn-secondary flex items-center gap-2"
-          :disabled="sendingCommand || !filters.account_id"
-          @click="openScheduleModal"
-        >
-          <ClockIcon class="w-4 h-4" />
-          Set Schedule
-        </button>
-      </div>
-      <p v-if="!filters.account_id" class="text-xs text-dark-500 mt-3">
-        ⚠️ Please select an account from the filters below to enable EA controls
-      </p>
-      <p v-if="interceptAllTrading" class="text-xs text-primary-400 mt-2">
-        ℹ️ Intercepting ALL trading on this account (Magic Buy/Sell ignored)
-      </p>
-      <p v-else-if="(targetMagicBuy && parseInt(targetMagicBuy) > 0) || (targetMagicSell && parseInt(targetMagicSell) > 0)" class="text-xs text-primary-400 mt-2">
-        ℹ️ Controlling EA with Magic BUY: {{ targetMagicBuy || '0 (all)' }}, Magic SELL: {{ targetMagicSell || '0 (all)' }}
-      </p>
     </div>
 
     <!-- Filters -->

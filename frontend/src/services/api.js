@@ -66,6 +66,7 @@ export const accountsAPI = {
   delete: (id) => api.delete(`/accounts/${id}`),
   sync: (id) => api.post(`/accounts/${id}/sync`),
   triggerSync: (id) => api.post(`/accounts/${id}/trigger-sync`),
+  getEAInfo: (id) => api.get(`/accounts/${id}/ea-info`),
   regenerateToken: (id) => api.post(`/accounts/${id}/regenerate-token`),
   clearData: (id) => api.post(`/accounts/${id}/clear-data`),
   getSyncLogs: (id, params) => api.get(`/accounts/${id}/sync-logs`, { params }),

@@ -61,6 +61,7 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('accounts', AccountController::class);
         Route::post('/accounts/{account}/sync', [AccountController::class, 'sync']);
         Route::post('/accounts/{account}/trigger-sync', [AccountController::class, 'triggerSync']);
+        Route::get('/accounts/{account}/ea-info', [AccountController::class, 'getEAInfo']);
         Route::post('/accounts/{account}/regenerate-token', [AccountController::class, 'regenerateToken']);
         Route::post('/accounts/{account}/clear-data', [AccountController::class, 'clearData']);
         Route::get('/accounts/{account}/sync-logs', [AccountController::class, 'syncLogs']);

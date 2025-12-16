@@ -56,6 +56,13 @@ class EABridgeController extends Controller
             'trades.*.magic_number' => 'nullable|integer',
             'market_regime' => 'nullable|array',
             'market_regime.regime' => 'nullable|string|in:SIDEWAYS,BULLISH,BEARISH,UNKNOWN',
+            'ea_info' => 'nullable|array',
+            'ea_info.magic_buy' => 'nullable|integer',
+            'ea_info.magic_sell' => 'nullable|integer',
+            'ea_info.trading_mode' => 'nullable|integer|in:0,1,2',
+            'ea_info.intercept_all' => 'nullable|boolean',
+            'ea_info.is_paused' => 'nullable|boolean',
+            'ea_info.adx_current' => 'nullable|numeric',
         ]);
 
         // Create sync log
@@ -268,13 +275,31 @@ class EABridgeController extends Controller
                 'error_message' => null,
             ];
             
-            // Store market regime in meta field
-            if (isset($validated['market_regime']['regime'])) {
+            // Store market regime and EA info in meta field (only if column exists)
+            if (Schema::hasColumn('accounts', 'meta')) {
                 $meta = $account->meta ?? [];
-                $meta['market_regime'] = [
-                    'regime' => $validated['market_regime']['regime'],
-                    'updated_at' => now()->toIso8601String(),
-                ];
+                
+                // Store market regime
+                if (isset($validated['market_regime']['regime'])) {
+                    $meta['market_regime'] = [
+                        'regime' => $validated['market_regime']['regime'],
+                        'updated_at' => now()->toIso8601String(),
+                    ];
+                }
+                
+                // Store EA info (trading mode, magic numbers, intercept status, etc.)
+                if (isset($validated['ea_info'])) {
+                    $meta['ea_info'] = [
+                        'magic_buy' => $validated['ea_info']['magic_buy'] ?? null,
+                        'magic_sell' => $validated['ea_info']['magic_sell'] ?? null,
+                        'trading_mode' => $validated['ea_info']['trading_mode'] ?? null,
+                        'intercept_all' => $validated['ea_info']['intercept_all'] ?? false,
+                        'is_paused' => $validated['ea_info']['is_paused'] ?? false,
+                        'adx_current' => $validated['ea_info']['adx_current'] ?? null,
+                        'updated_at' => now()->toIso8601String(),
+                    ];
+                }
+                
                 $updateData['meta'] = $meta;
             }
             

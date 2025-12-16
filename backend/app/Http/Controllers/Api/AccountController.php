@@ -338,6 +338,76 @@ class AccountController extends Controller
     }
 
     /**
+     * Get EA information from account meta and latest sync log.
+     */
+    public function getEAInfo(Request $request, Account $account): JsonResponse
+    {
+        // Authorize
+        $this->authorize('view', $account);
+
+        $meta = $account->meta ?? [];
+        $marketRegime = $meta['market_regime'] ?? null;
+        $eaInfoFromMeta = $meta['ea_info'] ?? null;
+        
+        // Get latest sync log for additional info
+        $latestSyncLog = $account->syncLogs()
+            ->where('status', 'success')
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        // Count open trades
+        $openTrades = $account->trades()
+            ->whereNull('close_time')
+            ->get();
+        
+        $openPositions = [
+            'total' => $openTrades->count(),
+            'intercepted_buy' => $openTrades->where('type', 'buy')->count(),
+            'intercepted_sell' => $openTrades->where('type', 'sell')->count(),
+        ];
+
+        // Initialize EA info with defaults
+        $eaInfo = [
+            'magic_buy' => null,
+            'magic_sell' => null,
+            'trading_mode' => null,
+            'intercept_all' => false,
+            'is_paused' => false,
+            'market_regime' => null,
+            'adx_current' => null,
+            'open_positions' => $openPositions,
+            'last_sync_at' => $account->last_sync_at?->toIso8601String(),
+        ];
+
+        // Get EA info from meta (stored during sync)
+        if ($eaInfoFromMeta) {
+            $eaInfo['magic_buy'] = $eaInfoFromMeta['magic_buy'] ?? null;
+            $eaInfo['magic_sell'] = $eaInfoFromMeta['magic_sell'] ?? null;
+            $eaInfo['trading_mode'] = $eaInfoFromMeta['trading_mode'] ?? null;
+            $eaInfo['intercept_all'] = $eaInfoFromMeta['intercept_all'] ?? false;
+            $eaInfo['is_paused'] = $eaInfoFromMeta['is_paused'] ?? false;
+            $eaInfo['adx_current'] = $eaInfoFromMeta['adx_current'] ?? null;
+        }
+
+        // Get market regime from meta or latest sync log
+        if ($marketRegime) {
+            $eaInfo['market_regime'] = [
+                'regime' => $marketRegime['regime'] ?? 'UNKNOWN',
+                'updated_at' => $marketRegime['updated_at'] ?? null,
+            ];
+        } elseif ($latestSyncLog && isset($latestSyncLog->payload['market_regime'])) {
+            $eaInfo['market_regime'] = [
+                'regime' => $latestSyncLog->payload['market_regime']['regime'] ?? 'UNKNOWN',
+                'updated_at' => $latestSyncLog->created_at->toIso8601String(),
+            ];
+        }
+
+        return response()->json([
+            'ea_info' => $eaInfo,
+        ]);
+    }
+
+    /**
      * Trigger EA sync now (for on-demand sync mode).
      */
     public function triggerSync(Request $request, Account $account): JsonResponse

@@ -32,6 +32,10 @@ const accountData = ref(null)
 const syncLogs = ref([])
 const chartModal = ref({ show: false, type: null })
 
+// Market Regime (from EA)
+const marketRegime = ref(null)
+const loadingMarketRegime = ref(false)
+
 // Watch accountData to ensure it never becomes invalid
 watch(accountData, (newValue) => {
   if (newValue && (!newValue.account || Object.keys(newValue.account).length === 0)) {
@@ -46,6 +50,7 @@ watch(accountData, (newValue) => {
 onMounted(async () => {
   await fetchAccountData()
   await fetchSyncLogs()
+  await fetchMarketRegime()
 })
 
 const fetchAccountData = async (showLoading = true) => {
@@ -136,6 +141,67 @@ const fetchSyncLogs = async () => {
   }
 }
 
+// Fetch Market Regime from current account
+const fetchMarketRegime = async () => {
+  loadingMarketRegime.value = true
+  try {
+    const response = await accountsAPI.getOne(route.params.id)
+    const account = response.data?.account
+    if (account && account.meta && account.meta.market_regime) {
+      marketRegime.value = account.meta.market_regime
+    } else {
+      marketRegime.value = null
+    }
+  } catch (error) {
+    console.error('Failed to fetch market regime:', error)
+    marketRegime.value = null
+  } finally {
+    loadingMarketRegime.value = false
+  }
+}
+
+const getMarketRegimeClass = (regime) => {
+  if (!regime || !regime.regime) return 'text-gray-400'
+  switch (regime.regime) {
+    case 'BULLISH':
+      return 'text-green-400'
+    case 'BEARISH':
+      return 'text-red-400'
+    case 'SIDEWAYS':
+      return 'text-yellow-400'
+    default:
+      return 'text-gray-400'
+  }
+}
+
+const getMarketRegimeBg = (regime) => {
+  if (!regime || !regime.regime) return 'bg-gray-500/10 border-gray-500/30'
+  switch (regime.regime) {
+    case 'BULLISH':
+      return 'bg-green-500/10 border-green-500/30'
+    case 'BEARISH':
+      return 'bg-red-500/10 border-red-500/30'
+    case 'SIDEWAYS':
+      return 'bg-yellow-500/10 border-yellow-500/30'
+    default:
+      return 'bg-gray-500/10 border-gray-500/30'
+  }
+}
+
+const getMarketRegimeIcon = (regime) => {
+  if (!regime || !regime.regime) return '❓'
+  switch (regime.regime) {
+    case 'BULLISH':
+      return '📈'
+    case 'BEARISH':
+      return '📉'
+    case 'SIDEWAYS':
+      return '➡️'
+    default:
+      return '❓'
+  }
+}
+
 const handleSync = async () => {
   try {
     // Preserve current accountData before sync
@@ -151,6 +217,7 @@ const handleSync = async () => {
       try {
         await fetchAccountData(false) // Don't show loading spinner
         await fetchSyncLogs() // Also refresh sync logs
+        await fetchMarketRegime() // Refresh market regime
       } catch (error) {
         console.error('Failed to refresh data after sync:', error)
         // Restore previous data if refresh fails
@@ -323,6 +390,86 @@ const closeChartModal = () => {
           prefix="$"
           :type="(accountData.stats?.total_profit || 0) >= 0 ? 'profit' : 'loss'"
         />
+      </div>
+
+      <!-- Market Regime Card (from EA) -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2.5">
+            <span class="text-xl">📊</span>
+            <div>
+              <h2 class="text-base font-semibold">Market Regime (XAUUSD H1)</h2>
+              <p class="text-xs text-dark-400">EMA200 + ADX(14) Analysis</p>
+            </div>
+          </div>
+          <button 
+            @click="fetchMarketRegime"
+            :disabled="loadingMarketRegime"
+            class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg hover:bg-blue-600/30 transition-colors disabled:opacity-50"
+          >
+            <svg :class="['w-3.5 h-3.5', loadingMarketRegime && 'animate-spin']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            {{ loadingMarketRegime ? '...' : '↻' }}
+          </button>
+        </div>
+
+        <!-- Market Regime Display -->
+        <div v-if="marketRegime" :class="[
+          'p-4 rounded-lg border',
+          getMarketRegimeBg(marketRegime)
+        ]">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-3">
+              <span class="text-3xl">{{ getMarketRegimeIcon(marketRegime) }}</span>
+              <div>
+                <div :class="[
+                  'text-xl font-bold',
+                  getMarketRegimeClass(marketRegime)
+                ]">
+                  {{ marketRegime.regime }}
+                </div>
+                <div class="text-xs text-dark-400 mt-0.5">
+                  Based on EMA200 & ADX(14)
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Regime Description -->
+          <div class="mt-3 text-xs text-dark-300">
+            <p v-if="marketRegime.regime === 'BULLISH'" class="text-green-300">
+              <strong>Bullish Trend:</strong> ADX ≥ 25 and Close Price > EMA200. Strong upward momentum detected.
+            </p>
+            <p v-else-if="marketRegime.regime === 'BEARISH'" class="text-red-300">
+              <strong>Bearish Trend:</strong> ADX ≥ 25 and Close Price < EMA200. Strong downward momentum detected.
+            </p>
+            <p v-else-if="marketRegime.regime === 'SIDEWAYS'" class="text-yellow-300">
+              <strong>Sideways Market:</strong> ADX < 20 or weak trend. Market is ranging/consolidating.
+            </p>
+            <p v-else class="text-gray-400">
+              Market regime data unavailable or insufficient data.
+            </p>
+          </div>
+
+          <!-- Updated At -->
+          <div v-if="marketRegime.updated_at" class="mt-3 text-xs text-dark-500 pt-3 border-t border-dark-700/50">
+            Updated: {{ new Date(marketRegime.updated_at).toLocaleString() }}
+          </div>
+        </div>
+
+        <!-- Loading State -->
+        <div v-else-if="loadingMarketRegime" class="flex items-center justify-center py-6">
+          <div class="spinner mr-2"></div>
+          <span class="text-xs text-dark-400">Loading...</span>
+        </div>
+
+        <!-- Empty State -->
+        <div v-else class="text-center py-6 text-dark-400">
+          <span class="text-2xl mb-1 block">📊</span>
+          <p class="text-xs">No market regime data available</p>
+          <p class="text-xs mt-1 text-dark-500">Sync EA to update market regime</p>
+        </div>
       </div>
 
       <!-- Main Charts - 3 columns -->

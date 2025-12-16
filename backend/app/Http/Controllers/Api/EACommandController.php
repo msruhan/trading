@@ -48,7 +48,7 @@ class EACommandController extends Controller
         }
 
         $validated = $request->validate([
-            'command' => 'required|string|in:close_all,pause,resume,schedule',
+            'command' => 'required|string|in:close_all,pause,resume,schedule,set_trading_mode',
             'params' => 'nullable|array',
             'params.days' => 'nullable|array', // For schedule: [1,2,3,4,5] (Monday=1, Sunday=7)
             'params.start_time' => 'nullable|string', // For schedule: '10:00'
@@ -56,6 +56,7 @@ class EACommandController extends Controller
             'params.magic_buy' => 'nullable|integer|min:0', // For close_all/schedule: magic number for BUY orders
             'params.magic_sell' => 'nullable|integer|min:0', // For close_all/schedule: magic number for SELL orders
             'params.intercept_all' => 'nullable|boolean', // Intercept ALL trading on this account (ignores magic_buy/magic_sell)
+            'params.trading_mode' => 'nullable|integer|in:0,1,2', // For set_trading_mode: 0=Auto, 1=Buy Only, 2=Sell Only
         ]);
 
         // Create command
